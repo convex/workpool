@@ -384,6 +384,12 @@ describe("loop", () => {
           // max(toSegment(runAt), now), as `enqueue` used to compute it.
           segment: toSegment(Math.max(runAt, Date.now())),
         });
+        const state = await ctx.db.query("internalState").unique();
+        if (state) {
+          await ctx.db.patch("internalState", state._id, {
+            segmentCursors: { ...state.segmentCursors, sweep: undefined },
+          });
+        }
         return workId;
       });
     }
@@ -479,6 +485,7 @@ describe("loop", () => {
       await initialize();
       const workId = await enqueueLegacyWork(Date.now());
 
+      await runLoop(); // upgrade
       await runLoop();
 
       const o = await observe();
@@ -502,7 +509,7 @@ describe("loop", () => {
       expect(o.running).toHaveLength(0);
       expect(o.pendingStart[0].segment).toBe(toTimestamp(startsAt));
 
-      await runLoop(); // the sweep verifies the re-keyed entry, once
+      await runLoop();
       const idle = await runLoop();
       assert(idle.kind === "idle");
       expect(idle.timeoutMs).toBe(startsAt - Date.now());
@@ -525,7 +532,7 @@ describe("loop", () => {
       const runAt = Date.now() + 100 * SECOND;
       const workId = await enqueueLegacyWork(runAt);
       await runLoop(); // re-keys it to its start time
-      await runLoop(); // the sweep verifies the re-keyed entry
+      await runLoop();
 
       await t.mutation(api.lib.cancel, { id: workId });
       await runLoop();
