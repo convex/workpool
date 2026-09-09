@@ -38,6 +38,8 @@ export const backfillPendingStartIds = internalMutation({
       .paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE });
     const results = await Promise.all(
       page.page.map(async (entry) => {
+        // Packed entries already record their pointers at enqueue.
+        if (entry.workId === undefined) return "skipped";
         const work = await ctx.db.get("work", entry.workId);
         if (!work) {
           await ctx.db.delete("pendingStart", entry._id);
