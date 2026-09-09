@@ -1055,7 +1055,7 @@ describe("state machine", () => {
       await t.run(async (ctx) => {
         await ctx.db.insert("pendingCancelation", {
           workId,
-          segment: segment,
+          segment,
         });
       });
 
