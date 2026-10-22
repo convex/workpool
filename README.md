@@ -296,8 +296,8 @@ import { defineApp } from "convex/server";
 import workpool from "@convex-dev/workpool/convex.config.js";
 
 const app = defineApp();
-app.use(workpool, { name: "emailWorkpool", env: {} });
-app.use(workpool, { name: "scrapeWorkpool", env: {} });
+app.use(workpool, { name: "emailWorkpool" });
+app.use(workpool, { name: "scrapeWorkpool" });
 export default app;
 ```
 
@@ -339,8 +339,6 @@ export default app;
 
 You can also bind it by reference to one of your app's own env vars
 (`app.use(workpool, { env: { LOG_LEVEL: app.env.MY_LOG_LEVEL } })`).
-
-If you name the component and don't want to bind `LOG_LEVEL`, pass `env: {}`.
 
 If you don't specify a `maxParallelism` as a Class-level option, you can specify
 it at runtime by calling
