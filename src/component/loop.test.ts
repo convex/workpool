@@ -557,7 +557,9 @@ describe("loop", () => {
       const { lastRecovery } = await observe();
       const untilNextRecovery =
         fromSegment(lastRecovery + RECOVERY_PERIOD_SEGMENTS) - Date.now();
-      expect(result.timeoutMs).toBe(untilNextRecovery);
+      // Date.now() is pinned per query, so allow a few ms of skew.
+      assert(result.timeoutMs !== undefined);
+      expect(Math.abs(result.timeoutMs - untilNextRecovery)).toBeLessThan(10);
       expect(result.timeoutMs).toBeLessThan(5 * MINUTE);
     });
   });
