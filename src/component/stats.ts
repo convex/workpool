@@ -14,7 +14,6 @@ import {
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
-import { paginator } from "convex-helpers/server/pagination";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -78,7 +77,7 @@ export async function generateReport(
     return;
   }
   const currentSegment = toTimestamp(Date.now());
-  const pendingStart = await paginator(ctx.db, schema)
+  const pendingStart = await ctx.db
     .query("pendingStart")
     .withIndex("segment", (q) =>
       q
@@ -97,9 +96,6 @@ export async function generateReport(
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
-      startSegment: 0n,
-      endSegment: currentSegment,
-      cursor: pendingStart.continueCursor,
       report: state.report,
       running: state.running.length,
       logLevel,
