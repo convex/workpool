@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.15 (Unreleased)
+
+- Records each job's queue entry on its work document, so the next minor version
+  can report status accurately for work already in flight. Downgrading to an
+  earlier version fails schema validation while such work exists.
+
 ## 0.4.14
 
 - Updates the /test entrypoint for compatibility with convex-test's new

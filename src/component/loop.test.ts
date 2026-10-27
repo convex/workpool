@@ -188,6 +188,17 @@ describe("loop", () => {
       expect(await statusOf(workId)).toMatchObject({ state: "running" });
     });
 
+    it("records the queue entry on older work when starting it", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      const [pending] = (await observe()).pendingStart;
+
+      await runLoop();
+
+      const work = await t.run((ctx) => ctx.db.get("work", workId));
+      expect(work?.pendingStartId).toBe(pending._id);
+    });
+
     it("removes work from running once a successful completion is processed", async () => {
       await initialize();
       const workId = await enqueueWork();
@@ -391,6 +402,8 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingStart).toHaveLength(1);
       expect(o.pendingStart[0].workId).toBe(workId);
+      const work = await t.run((ctx) => ctx.db.get("work", workId));
+      expect(work?.pendingStartId).toBe(o.pendingStart[0]._id);
       expect(await statusOf(workId)).toMatchObject({
         state: "pending",
         previousAttempts: 1,

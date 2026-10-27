@@ -129,6 +129,23 @@ describe("lib", () => {
       expect(status).toEqual({ state: "pending", previousAttempts: 0 });
     });
 
+    it("records the queue entry on the work", async () => {
+      const id = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: {},
+        fnType: "mutation",
+        runAt: Date.now() + 60_000,
+        config: {},
+      });
+      await t.run(async (ctx) => {
+        const pending = await ctx.db.query("pendingStart").unique();
+        expect((await ctx.db.get("work", id))?.pendingStartId).toBe(
+          pending?._id,
+        );
+      });
+    });
+
     it("should throw error if maxParallelism is too high", async () => {
       await expect(
         t.mutation(api.lib.enqueue, {

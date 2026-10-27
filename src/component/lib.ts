@@ -112,10 +112,11 @@ async function enqueueHandler(
   // Store the work item
   const workId = await ctx.db.insert("work", workItem);
 
-  await ctx.db.insert("pendingStart", {
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId,
     segment: max(toSegment(runAt), getCurrentSegment()),
   });
+  await ctx.db.patch("work", workId, { pendingStartId });
   recordEnqueued(console, { workId, fnName: workArgs.fnName, runAt });
   return workId;
 }

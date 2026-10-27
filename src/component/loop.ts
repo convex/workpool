@@ -562,6 +562,9 @@ async function handleStart(
           console.error(`Trying to start, but work not found: ${workId}`);
           return null;
         }
+        if (work.pendingStartId === undefined) {
+          await ctx.db.patch("work", workId, { pendingStartId: _id });
+        }
         return {
           work,
           lagMs: Date.now() - fromSegment(segment),
@@ -698,10 +701,11 @@ async function rescheduleJob(
   const nextAttempt = withJitter(backoffMs);
   const startTime = Date.now() + nextAttempt;
   const segment = toSegment(startTime);
-  await ctx.db.insert("pendingStart", {
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,
   });
+  await ctx.db.patch("work", work._id, { pendingStartId });
   return true;
 }
 
