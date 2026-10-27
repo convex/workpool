@@ -788,12 +788,9 @@ async function rescheduleJob(
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
   const nextAttempt = withJitter(backoffMs);
-  // Keep retries at or above the snapshot so they cannot land behind the cursor.
-  // TODO: Remove the snapshot floor once convex-test guarantees snapshotTs <= Date.now().
-  const segment = maxBigint(
-    toTimestamp(Date.now() + nextAttempt),
-    snapshotTs(),
-  );
+  // Date.now() is at least this mutation's snapshot, so retries cannot land
+  // behind the incoming cursor, which is bounded by the query's snapshot.
+  const segment = toTimestamp(Date.now() + nextAttempt);
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,

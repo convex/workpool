@@ -22,7 +22,6 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   fromTimestamp,
-  snapshotTs,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -32,7 +31,7 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 
 /**
- * Drive getBatch and run in one transaction, as batch-worker does. Observe
+ * Drive getBatch and run in separate transactions, allowing snapshot changes. Observe
  * public status, queue contents, and running jobs; simulate completions through
  * the production completion handler. batch-worker tests cover loop liveness.
  * Move time with setSystemTime so scheduled dummy workers never execute.
@@ -118,25 +117,15 @@ describe("loop", () => {
     });
   }
 
-  async function advanceClockToSnapshot() {
-    // convex-test advances commit timestamps even while the fake clock is frozen.
-    const snapshot = await t.query(async () => snapshotTs());
-    const snapshotMs = Number((snapshot + 999_999n) / 1_000_000n);
-    if (snapshotMs > Date.now()) vi.setSystemTime(snapshotMs);
-  }
-
-  /** Run getBatch and run in one transaction. */
+  /** Run the query and mutation at potentially different snapshots. */
   async function runLoop() {
-    await advanceClockToSnapshot();
-    return t.run(async (ctx) => {
-      const result = await ctx.runQuery(internal.loop.getBatch, {
-        name: WORKER_NAME,
-      });
-      if (result.kind === "work") {
-        await ctx.runMutation(internal.loop.run, result.batch);
-      }
-      return result;
+    const result = await t.query(internal.loop.getBatch, {
+      name: WORKER_NAME,
     });
+    if (result.kind === "work") {
+      await t.mutation(internal.loop.run, result.batch);
+    }
+    return result;
   }
 
   /** Pretend a worker finished a job by inserting pendingCompletion. */
