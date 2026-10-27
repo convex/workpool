@@ -223,11 +223,10 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
     return { state: "finished" } as const;
   }
   if (work.pendingStartId === undefined) {
-    // Old running jobs have no queue pointer; queued jobs get one during upgrade.
-    const state = await ctx.db.query("internalState").order("desc").first();
-    if (!state?.running.some((r) => r.workId === id)) {
-      return { state: "pending", previousAttempts: work.attempts } as const;
-    }
+    // During migration, legacy work without a queue pointer reports pending,
+    // even if already running. This temporary approximation lasts until the
+    // work is upgraded, retried, or finished.
+    return { state: "pending", previousAttempts: work.attempts } as const;
   }
   if (await findPendingStart(ctx, work)) {
     return { state: "pending", previousAttempts: work.attempts } as const;

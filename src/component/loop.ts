@@ -29,7 +29,6 @@ import {
   MINUTE,
   MIN_TIMESTAMP,
   SECOND,
-  snapshotTs,
   toTimestamp,
   vResult,
 } from "./shared.js";
@@ -94,8 +93,10 @@ const vStart = v.object({
 });
 type Start = Infer<typeof vStart>;
 
-// batch-worker calls getBatch and run in one transaction, sharing a snapshot.
+// The query sees the previous worker mutation's writes, but other transactions
+// may commit between getBatch and run. Revalidate candidates in the mutation.
 const batchFields = {
+  snapshotTs: v.int64(),
   upgrade: v.optional(v.object({ starts: v.array(vStart), done: v.boolean() })),
   // Whether this iteration should run the periodic work-recovery scan.
   recovery: v.boolean(),
@@ -114,6 +115,7 @@ export const getBatch = internalQuery({
   args: batchValidators.vQueryArgs,
   returns: batchValidators.vQueryReturns,
   handler: async (ctx): Promise<BatchResult<Batch>> => {
+    const snapshotTs = ctx.meta.getSnapshotTs();
     const globals = await getGlobals(ctx);
     const state = await ctx.db.query("internalState").order("desc").first();
     if (state?.segmentCursors.sweep === undefined) {
@@ -125,6 +127,7 @@ export const getBatch = internalQuery({
         return {
           kind: "work",
           batch: {
+            snapshotTs,
             recovery: false,
             completions: [],
             cancelations: [],
@@ -173,6 +176,7 @@ export const getBatch = internalQuery({
 
     if (hasWork) {
       const batch: Batch = {
+        snapshotTs,
         recovery: isRecoveryIter,
         completions: completions.map((c) => ({
           pendingId: c._id,
@@ -232,7 +236,8 @@ export const run = internalMutation({
       for (const start of batch.upgrade.starts) {
         const work = await ctx.db.get("work", start.workId);
         if (!work) {
-          await ctx.db.delete("pendingStart", start.pendingId);
+          const pending = await ctx.db.get("pendingStart", start.pendingId);
+          if (pending) await ctx.db.delete("pendingStart", pending._id);
           continue;
         }
         await ctx.db.patch("work", work._id, {
@@ -321,13 +326,16 @@ export const run = internalMutation({
     if (batch.cancelations.length > 0) {
       state.segmentCursors.cancelation = batch.cancelations.at(-1)!.segment;
     }
-    // Every selected start was handled. Cap at the snapshot so racing
+    // Every selected start was handled. Cap at the query snapshot so racing
     // commits remain ahead. Inclusive reads retain entries sharing a timestamp.
-    const snapshot = snapshotTs();
     const lastStart = batch.starts.at(-1);
     if (lastStart) {
-      state.segmentCursors.incoming =
-        lastStart.segment < snapshot ? lastStart.segment : snapshot;
+      state.segmentCursors.incoming = maxBigint(
+        state.segmentCursors.incoming,
+        lastStart.segment < batch.snapshotTs
+          ? lastStart.segment
+          : batch.snapshotTs,
+      );
     }
     // Entries left at the boundary stamp are revisited by an inclusive read.
     if (batch.sweepStop !== undefined) {
@@ -376,14 +384,13 @@ async function queryPending(
   const remainingRunning = running.filter(
     (r) => !completed.has(r.workId),
   ).length;
-  // Bound per-iteration writes. getBatch and run share a snapshot, so every
-  // selected start fits after completions are processed.
+  // Bound per-iteration writes. This is a capacity estimate: maxParallelism may
+  // change before run, allowing temporary excess parallelism.
   const startLimit = Math.min(
     MAIN_BATCH_SIZE,
     Math.max(0, maxParallelism - remainingRunning),
   );
-  // Work completing or canceling this iteration is skipped when reading; the
-  // same iteration removes those entries, so the cursors may pass them.
+  // Exclude starts whose work is completing or canceling in this batch.
   const excluded = new Set([
     ...completed,
     ...cancelations.map((c) => c.workId),
@@ -473,9 +480,12 @@ async function handleCompletions(
 ) {
   // Completions that were going to be retried but have since been canceled.
   const toCancel: CompleteJob[] = [];
+  const completedWork = new Set<Id<"work">>();
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete("pendingCompletion", c.pendingId);
+      if (completedWork.has(c.workId)) return;
+      completedWork.add(c.workId);
 
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
@@ -514,9 +524,7 @@ async function handleCompletions(
   );
   // We do this after so the stats above know if it was in progress.
   const before = state.running.length;
-  state.running = state.running.filter(
-    (r) => !completed.some((c) => c.workId === r.workId),
-  );
+  state.running = state.running.filter((r) => !completedWork.has(r.workId));
   const numCompleted = before - state.running.length;
   state.report.completed += numCompleted;
   console.debug(`[main] completed ${numCompleted} work`);
@@ -643,7 +651,14 @@ async function handleStart(
       console.error(`Trying to start, but work not found: ${workId}`);
       continue;
     }
-    if (work.canceled) {
+    const pendingCancelation = await ctx.db
+      .query("pendingCancelation")
+      .withIndex("workId", (q) => q.eq("workId", workId))
+      .first();
+    if (work.canceled || pendingCancelation) {
+      if (!work.canceled) {
+        await ctx.db.patch("work", workId, { canceled: true });
+      }
       console.debug(`[main] ${workId} was canceled (not starting)`);
       state.report.canceled++;
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
