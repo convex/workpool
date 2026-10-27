@@ -22,9 +22,7 @@ import {
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
-  maxBigint,
   MINUTE,
-  snapshotTs,
   toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
@@ -118,7 +116,7 @@ export async function enqueueHandler(
   let pendingStartId: Id<"pendingStart">;
   if (runAt > now) {
     // Scheduled keys stay at or above the snapshot, which bounds the cursor.
-    const segment = maxBigint(toTimestamp(runAt), snapshotTs());
+    const segment = toTimestamp(runAt);
     pendingStartId = await ctx.db.insert("pendingStart", {
       workId,
       segment,
