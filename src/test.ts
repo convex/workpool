@@ -20,10 +20,7 @@ const modules = import.meta.glob("./component/**/*.ts");
 export function register<
   Schema extends SchemaDefinition<GenericSchema, boolean>,
 >(t: TestConvex<Schema>, name: string = "workpool") {
-  batchWorker.register(
-    t as unknown as TestConvex<SchemaDefinition<GenericSchema, boolean>>,
-    `${name}/batchWorker`,
-  );
+  batchWorker.register(t, `${name}/batchWorker`);
   return t.registerComponent(name, schema, modules) as unknown as ComponentApi;
 }
 export default { register, schema, modules };
