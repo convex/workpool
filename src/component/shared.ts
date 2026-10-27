@@ -1,6 +1,6 @@
 import type { Infer, Validator, VAny } from "convex/values";
 
-import { jsonToConvex, v } from "convex/values";
+import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
 
 export const fnType = v.union(
@@ -60,23 +60,6 @@ export function fromTimestamp(timestamp: bigint): number {
     Number(timestamp / NS_PER_MS) +
     Number(timestamp % NS_PER_MS) / Number(NS_PER_MS)
   );
-}
-
-declare const Convex: {
-  syscall: (op: string, jsonArgs: string) => string;
-};
-
-/**
- * The snapshot this transaction reads at, in nanoseconds on the
- * commit-timestamp clock. Everything stamped at or below it is visible here,
- * and everything that commits later is stamped above it.
- *
- * TODO(convex): replace with `ctx.meta.getSnapshotTs()` once a released
- * `convex` exposes it; this is the syscall it wraps.
- */
-export function snapshotTs(): bigint {
-  const json = Convex.syscall("1.0/getSnapshotTs", "{}");
-  return jsonToConvex(JSON.parse(json)) as bigint;
 }
 
 export function maxBigint(a: bigint, b: bigint): bigint {
