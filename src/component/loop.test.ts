@@ -168,6 +168,139 @@ describe("loop", () => {
     return t.query(api.lib.status, { id: workId });
   }
 
+  async function getWorkBatch() {
+    const result = await t.query(internal.loop.getBatch, {
+      name: WORKER_NAME,
+    });
+    assert(result.kind === "work");
+    return result.batch;
+  }
+
+  describe("writes between the query and mutation", () => {
+    it("bounds the incoming cursor by the query snapshot", async () => {
+      await initialize();
+      const runAt = Date.now() + SECOND;
+      const workId = await enqueueWork({}, { runAt });
+      await runLoop(); // Verify the enqueue's scanTs before the work is due.
+      vi.setSystemTime(runAt);
+      const batch = await getWorkBatch();
+      expect(batch.starts.map((s) => s.workId)).toEqual([workId]);
+      expect(batch.snapshotTs).toBeLessThan(toTimestamp(runAt));
+
+      // A commit after the query advances the mutation's snapshot past runAt.
+      vi.setSystemTime(runAt + 1);
+      const laterId = await enqueueWork();
+      expect(
+        await t.query(async (ctx) => ctx.meta.getSnapshotTs()),
+      ).toBeGreaterThan(toTimestamp(runAt));
+      await t.mutation(internal.loop.run, batch);
+
+      expect((await observe()).segmentCursors!.incoming).toBe(batch.snapshotTs);
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toEqual([
+        workId,
+        laterId,
+      ]);
+    });
+
+    it("does not retry or cancel work deleted after its events were selected", async () => {
+      await initialize();
+      const retryId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+      await runLoop();
+      await simulateCompletion(retryId, { kind: "failed", error: "boom" });
+      const canceledId = await enqueueWork();
+      await t.mutation(api.lib.cancel, { id: canceledId });
+      const batch = await getWorkBatch();
+      expect(batch.completions).toHaveLength(1);
+      expect(batch.cancelations).toHaveLength(1);
+
+      await t.run(async (ctx) => {
+        await ctx.db.delete("work", retryId);
+        await ctx.db.delete("work", canceledId);
+      });
+      await t.mutation(internal.loop.run, batch);
+
+      const o = await observe();
+      expect(o.pendingCompletion).toHaveLength(0);
+      expect(o.pendingCancelation).toHaveLength(0);
+      expect(o.pendingStart.map((p) => p.workId)).toEqual([canceledId]);
+      // Consume the events and retire the completed attempt, without retrying
+      // missing work or scheduling a cancellation callback for it.
+      expect(o.running).toHaveLength(0);
+      const report = await t.query(
+        async (ctx) => (await ctx.db.query("internalState").unique())!.report,
+      );
+      expect(report.completed).toBe(1);
+      expect(report.retries).toBe(0);
+      expect(report.canceled).toBe(0);
+    });
+
+    it("tolerates cleanup deleting a selected start", async () => {
+      await initialize();
+      await enqueueWork();
+      const batch = await getWorkBatch();
+      await t.mutation(internal.danger.clearPending, {
+        before: Date.now() + MINUTE,
+      });
+      await t.mutation(internal.loop.run, batch);
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+    });
+
+    it("does not start work that finished after the query", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      const batch = await getWorkBatch();
+      await simulateCompletion(workId, { kind: "success", returnValue: null });
+      await t.mutation(internal.loop.run, batch);
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+      expect(await statusOf(workId)).toMatchObject({ state: "finished" });
+    });
+
+    it("honors a cancellation inserted after the query selected a start", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      const batch = await getWorkBatch();
+      expect(batch.cancelations).toHaveLength(0);
+      await t.mutation(api.lib.cancel, { id: workId });
+      await t.mutation(internal.loop.run, batch);
+
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+      expect(await t.query((ctx) => ctx.db.get("work", workId))).toMatchObject({
+        canceled: true,
+      });
+      await runLoop(); // Consuming the request must not complete it twice.
+      expect(
+        await t.query(
+          async (ctx) =>
+            (await ctx.db.query("internalState").unique())!.report.canceled,
+        ),
+      ).toBe(1);
+    });
+
+    it("does not retry work canceled after the query selected its completion", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 0, base: 2 },
+      });
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" });
+      const batch = await getWorkBatch();
+      await t.mutation(api.lib.cancel, { id: workId });
+      await t.mutation(internal.loop.run, batch);
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running).toHaveLength(0);
+    });
+  });
+
   // ────────────────────────────────────────────────────────────────────
   // Forward progress: work moves through the pipeline
   // ────────────────────────────────────────────────────────────────────
@@ -445,6 +578,33 @@ describe("loop", () => {
       });
     }
 
+    it("tolerates cleanup deleting a selected legacy start", async () => {
+      await initialize();
+      await enqueueLegacyWork(Date.now());
+      const batch = await getWorkBatch();
+      expect(batch.upgrade?.starts).toHaveLength(1);
+      await t.mutation(internal.danger.clearPending, {
+        before: Date.now() + MINUTE,
+      });
+      await t.mutation(internal.loop.run, batch);
+      const o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.segmentCursors!.sweep).toBe(0n);
+    });
+
+    it("removes a legacy start if its work finished after the query", async () => {
+      await initialize();
+      const workId = await enqueueLegacyWork(Date.now());
+      const batch = await getWorkBatch();
+      await simulateCompletion(workId, {
+        kind: "success",
+        returnValue: null,
+      });
+      await t.mutation(internal.loop.run, batch);
+      expect((await observe()).pendingStart).toHaveLength(0);
+      expect(await statusOf(workId)).toMatchObject({ state: "finished" });
+    });
+
     it("recovers legacy entries below all three persisted cursors", async () => {
       await initialize();
       const completedId = await enqueueWork();
@@ -589,7 +749,9 @@ describe("loop", () => {
       await runLoop();
       const idle = await runLoop();
       assert(idle.kind === "idle");
-      expect(idle.timeoutMs).toBe(startsAt - Date.now());
+      expect(idle.timeoutMs).toBe(
+        startsAt - (await t.query(async () => Date.now())),
+      );
 
       vi.setSystemTime(startsAt);
       await runLoop();
@@ -825,7 +987,7 @@ describe("loop", () => {
   // ────────────────────────────────────────────────────────────────────
 
   describe("getBatch", () => {
-    it("waits for wall time when the snapshot clock is ahead", async () => {
+    it("starts committed work even when the fake wall clock lags the snapshot", async () => {
       await initialize();
       const now = Date.now();
       vi.setSystemTime(now + SECOND);
@@ -835,11 +997,9 @@ describe("loop", () => {
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
       });
-      expect(result.kind).toBe("idle");
-      expect((await observe()).running).toHaveLength(0);
-
-      vi.setSystemTime(now + SECOND);
-      await runLoop();
+      // Convex (and convex-test) pins Date.now() to at least the snapshot.
+      assert(result.kind === "work");
+      await t.mutation(internal.loop.run, result.batch);
       expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
 
@@ -883,7 +1043,6 @@ describe("loop", () => {
     it("returns a work batch when a pending start is ready", async () => {
       await initialize();
       const workId = await enqueueWork();
-      await advanceClockToSnapshot();
       const result = await t.query(internal.loop.getBatch, {
         name: WORKER_NAME,
       });
@@ -927,7 +1086,9 @@ describe("loop", () => {
 
       const second = await runLoop();
       assert(second.kind === "idle");
-      expect(second.timeoutMs).toBe(runAt - Date.now());
+      expect(second.timeoutMs).toBe(
+        runAt - (await t.query(async () => Date.now())),
+      );
 
       // It starts when it comes due, untouched in the meantime.
       vi.setSystemTime(runAt);
@@ -1195,7 +1356,7 @@ describe("loop", () => {
       expect(o.running.map((r) => r.workId)).toEqual([laterId]);
       const retry = o.pendingStart.find((p) => p.workId === workId);
       assert(retry);
-      // Raised to the snapshot instead, so it's eligible next iteration.
+      // Date.now() >= snapshot, so it's eligible next iteration.
       expect(retry.segment).toBeGreaterThanOrEqual(o.segmentCursors!.incoming);
       await runLoop();
       o = await observe();
@@ -1205,15 +1366,26 @@ describe("loop", () => {
 
     it("keeps a sub-millisecond runAt exact and starts it within a millisecond", async () => {
       await initialize();
-      const runAt = Date.now() + 0.5;
-      const workId = await enqueueWork({}, { runAt });
+      // Use the transaction's clock: convex-test may pin it ahead of the
+      // external fake clock to preserve Date.now() >= snapshotTs.
+      const { runAt, workId } = await t.run(async (ctx) => {
+        const runAt = Date.now() + 0.5;
+        const workId = await enqueueHandler(ctx, createLogger("WARN"), {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          runAt,
+        });
+        return { runAt, workId };
+      });
       const entry = (await observe()).pendingStart.find(
         (p) => p.workId === workId,
       );
       assert(entry);
       expect(entry.segment).toBe(toTimestamp(runAt));
 
-      vi.setSystemTime(Date.now() + 1);
+      vi.setSystemTime(Math.ceil(runAt));
       await runLoop();
       expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
     });
