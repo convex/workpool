@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.15 (Unreleased)
+## 0.4.15
 
 - Upgrades @convex-dev/batch-worker to 0.3. Requires Convex 1.43 or later.
 - Records each pendingStart ID on its work document, so the next minor version
