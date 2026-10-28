@@ -17,8 +17,20 @@ export const backfillPendingStartIds = internalMutation({
     cursor: v.optional(v.string()),
   },
   returns: v.null(),
-  handler: async (ctx, args) => {
-    const before = args.before ?? Date.now();
+  handler: async (ctx, args): Promise<void> => {
+    const before = args.before;
+    if (!before) {
+      // Immediately pin the before value, so on OCCs we don't keep moving
+      // the target start.
+      // Eventually, old transactions will settle and we'll only be looking at
+      // older docs.
+      await ctx.scheduler.runAfter(
+        0,
+        internal.migrations.backfillPendingStartIds,
+        { before: Date.now() },
+      );
+      return;
+    }
     const page = await ctx.db
       .query("pendingStart")
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", before))
@@ -50,6 +62,5 @@ export const backfillPendingStartIds = internalMutation({
         { before, cursor: page.continueCursor },
       );
     }
-    return null;
   },
 });
