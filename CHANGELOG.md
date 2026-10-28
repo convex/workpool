@@ -7,7 +7,8 @@
   can report status accurately for work already in flight. Downgrading to an
   earlier version fails schema validation while such work exists.
 - Adds a one-off migration that records the queue entry on work enqueued before
-  this version. Before upgrading to 0.5, deploy this version and run
+  this version and removes queue entries whose work is gone. Before upgrading to
+  0.5, deploy this version and run
   `npx convex run --component workpool migrations:backfillPendingStartIds`,
   replacing `workpool` with the component's name if it differs.
 
