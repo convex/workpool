@@ -140,8 +140,9 @@ describe("lib", () => {
       });
       await t.run(async (ctx) => {
         const pending = await ctx.db.query("pendingStart").unique();
+        assert(pending);
         expect((await ctx.db.get("work", id))?.pendingStartId).toBe(
-          pending?._id,
+          pending._id,
         );
       });
     });

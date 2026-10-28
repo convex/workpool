@@ -19,7 +19,7 @@ export const backfillPendingStartIds = internalMutation({
   returns: v.null(),
   handler: async (ctx, args): Promise<void> => {
     const before = args.before;
-    if (!before) {
+    if (before === undefined) {
       // Immediately pin the before value, so on OCCs we don't keep moving
       // the target start.
       // Eventually, old transactions will settle and we'll only be looking at
