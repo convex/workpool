@@ -1,6 +1,9 @@
 import type { WithoutSystemFields } from "convex/server";
 import { type Infer, v } from "convex/values";
-import { type BatchResult, vBatchResult } from "@convex-dev/batch-worker";
+import {
+  type BatchResult,
+  defineBatchWorkerValidators,
+} from "@convex-dev/batch-worker";
 import { internal } from "./_generated/api.js";
 import { kickMainLoop } from "./kick.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -115,6 +118,7 @@ const batchFields = {
   starts: v.array(vStart),
 };
 type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
+const batchValidators = defineBatchWorkerValidators({ batch: batchFields });
 
 /**
  * The work query (batch-worker contract). Decides whether there's work to do,
@@ -126,8 +130,8 @@ type Batch = Infer<ReturnType<typeof v.object<typeof batchFields>>>;
  * a real dependency before going idle, so we just read the tables directly.
  */
 export const getBatch = internalQuery({
-  args: { name: v.string() },
-  returns: vBatchResult(v.object(batchFields)),
+  args: batchValidators.vQueryArgs,
+  returns: batchValidators.vQueryReturns,
   handler: async (ctx): Promise<BatchResult<Batch>> => {
     const globals = await getGlobals(ctx);
     const state = await ctx.db.query("internalState").unique();
@@ -232,7 +236,7 @@ export const getBatch = internalQuery({
  * Returning `null` tells batch-worker to re-run immediately to keep draining.
  */
 export const run = internalMutation({
-  args: batchFields,
+  args: batchValidators.vMutationArgs,
   returns: v.null(),
   handler: async (ctx, batch) => {
     const state = await getOrCreateState(ctx);
@@ -562,6 +566,9 @@ async function handleStart(
           console.error(`Trying to start, but work not found: ${workId}`);
           return null;
         }
+        if (work.pendingStartId === undefined) {
+          await ctx.db.patch("work", workId, { pendingStartId: _id });
+        }
         return {
           work,
           lagMs: Date.now() - fromSegment(segment),
@@ -698,10 +705,11 @@ async function rescheduleJob(
   const nextAttempt = withJitter(backoffMs);
   const startTime = Date.now() + nextAttempt;
   const segment = toSegment(startTime);
-  await ctx.db.insert("pendingStart", {
+  const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,
   });
+  await ctx.db.patch("work", work._id, { pendingStartId });
   return true;
 }
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.15 (Unreleased)
+
+- Upgrades @convex-dev/batch-worker to 0.3. Requires Convex 1.43 or later.
+- Records each pendingStart ID on its work document, so the next minor version
+  can report status accurately for work already in flight. **Not backwards
+  compatible due to this schema change.**
+- Adds a one-off migration that records the queue entry on work enqueued before
+  this version and removes queue entries whose work is gone. Before upgrading to
+  0.5, deploy this version and run
+  `npx convex run --component workpool migrations:backfillPendingStartIds`,
+  replacing `workpool` with each component instance's name.
+
 ## 0.4.14
 
 - Updates the /test entrypoint for compatibility with convex-test's new
