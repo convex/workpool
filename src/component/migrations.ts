@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { internalMutation } from "./_generated/server.js";
 
-const BATCH_SIZE = 500;
+const BATCH_SIZE = 64;
 
 /**
  * One-off backfill of `work.pendingStartId` for work enqueued before it was
