@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (Unreleased)
+
+- Orders queues by commit timestamp. Requires 1.47 or later.
+- Recovers near-term scheduled work that commits behind the queue cursor.
+- Migrates queued work from older versions automatically, preserving scheduled
+  start times. Large queues may briefly delay new work during migration.
+- Downgrading after this upgrade is unsupported because the queue format
+  changes.
+
 ## 0.4.15
 
 - Upgrades @convex-dev/batch-worker to 0.3. Requires Convex 1.43 or later.
