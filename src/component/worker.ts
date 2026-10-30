@@ -3,7 +3,7 @@
  * Should not touch any of loop's tables other than writing to `pendingCompletion`.
  * It is not responsible for handling retries.
  */
-import type { FunctionHandle } from "convex/server";
+import type { FunctionHandle_future } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
@@ -21,7 +21,7 @@ import { assert } from "convex-helpers";
 
 const commonRunArgs = {
   workId: v.id("work"),
-  fnHandle: v.string(),
+  fnHandle: v.function(),
   fnArgs: v.optional(v.record(v.string(), v.any())),
   payloadId: v.optional(v.id("payload")),
   attempt: v.number(),
@@ -35,7 +35,7 @@ const actionOrQueryRunArgs = {
 export const runMutationWrapper = internalMutation({
   args: {
     workId: v.id("work"),
-    fnHandle: v.string(),
+    fnHandle: v.function(),
     payloadId: v.optional(v.id("payload")),
     fnArgs: v.optional(v.record(v.string(), v.any())),
     fnType: v.union(v.literal("query"), v.literal("mutation")),
@@ -55,8 +55,8 @@ export const runMutationWrapper = internalMutation({
 
     try {
       const returnValue = await (args.fnType === "query"
-        ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs)
-        : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
+        ? ctx.runQuery(args.fnHandle, fnArgs)
+        : ctx.runMutation(args.fnHandle, fnArgs));
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
@@ -162,7 +162,7 @@ async function runOne(
   ctx: ActionCtx,
   console: Logger,
   args: {
-    fnHandle: string;
+    fnHandle: FunctionHandle_future<any>;
     fnArgs?: Record<string, unknown>;
     payloadId?: Id<"payload">;
     fnType: "action" | "query";
@@ -185,8 +185,8 @@ async function runOne(
     }
     const returnValue =
       args.fnType === "action"
-        ? await ctx.runAction(args.fnHandle as FunctionHandle<"action">, fnArgs)
-        : await ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs);
+        ? await ctx.runAction(args.fnHandle, fnArgs)
+        : await ctx.runQuery(args.fnHandle, fnArgs);
     const runResult: RunResult = { kind: "success", returnValue };
     return { runResult, runOnCompleteInline: true };
   } catch (e: unknown) {

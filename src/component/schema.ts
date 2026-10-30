@@ -47,27 +47,19 @@ export default defineSchema({
   // Written on enqueue. Deleted by `complete` for success, failure, canceled.
   work: defineTable({
     fnType,
-    fnHandle: v.string(),
+    fnHandle: v.function(),
     fnName: v.string(),
     fnArgs: v.optional(v.any()),
     // Reference to large args/onComplete context if stored separately
     payloadId: v.optional(v.id("payload")),
     payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
-    onComplete: v.optional(
-      v.object({ ...vOnCompleteFnContext.fields, fnHandle: v.string() }),
-    ),
+    onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
     // May point to a deleted entry after starting, or be absent on older work.
     pendingStartId: v.optional(v.id("pendingStart")),
-  })
-    // Validates existing handles in the background. A later release enforces
-    // these, which would otherwise check every work document during the push.
-    .staged({
-      fnHandle: v.function(),
-      onComplete: v.optional(vOnCompleteFnContext),
-    }),
+  }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.
   pendingStart: defineTable({
