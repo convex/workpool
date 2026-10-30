@@ -1,4 +1,4 @@
-import type { WithoutSystemFields } from "convex/server";
+import type { FunctionHandle_future, WithoutSystemFields } from "convex/server";
 import {
   afterEach,
   assert,
@@ -176,7 +176,7 @@ describe("state machine", () => {
   ) {
     return ctx.db.insert("work", {
       fnType: "action",
-      fnHandle: "test_handle",
+      fnHandle: "test_handle" as FunctionHandle_future<any>,
       fnName: "test_fn",
       fnArgs: {},
       attempts: 0,
@@ -190,7 +190,7 @@ describe("state machine", () => {
   ) {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
       workId,
-      fnHandle: "test_handle",
+      fnHandle: "test_handle" as FunctionHandle_future<any>,
       fnArgs: {},
       logLevel: "WARN",
       attempt: 0,
@@ -909,7 +909,7 @@ describe("state machine", () => {
       const w2 = await t.run<Id<"work">>(async (ctx) => {
         const id = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "test_handle",
+          fnHandle: "test_handle" as FunctionHandle_future<any>,
           fnName: "test_fn2",
           fnArgs: {},
           attempts: 0,
@@ -933,7 +933,7 @@ describe("state machine", () => {
       const ids = await t.run(async (ctx) => {
         const w1 = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h1",
+          fnHandle: "h1" as FunctionHandle_future<any>,
           fnName: "fn1",
           fnArgs: {},
           attempts: 0,
@@ -941,7 +941,7 @@ describe("state machine", () => {
         });
         const w2 = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h2",
+          fnHandle: "h2" as FunctionHandle_future<any>,
           fnName: "fn2",
           fnArgs: {},
           attempts: 0,
@@ -952,7 +952,7 @@ describe("state machine", () => {
           internal.worker.runActionWrapper,
           {
             workId: w1,
-            fnHandle: "h1",
+            fnHandle: "h1" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,
@@ -963,7 +963,7 @@ describe("state machine", () => {
           internal.worker.runActionWrapper,
           {
             workId: w2,
-            fnHandle: "h2",
+            fnHandle: "h2" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,
@@ -1048,7 +1048,7 @@ describe("state machine", () => {
       await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h",
+          fnHandle: "h" as FunctionHandle_future<any>,
           fnName: "fn",
           fnArgs: {},
           attempts: 0,
@@ -1104,7 +1104,7 @@ describe("state machine", () => {
       const workId = await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h",
+          fnHandle: "h" as FunctionHandle_future<any>,
           fnName: "fn",
           fnArgs: {},
           attempts: 1,
@@ -1115,7 +1115,7 @@ describe("state machine", () => {
           internal.worker.runActionWrapper,
           {
             workId: wId,
-            fnHandle: "h",
+            fnHandle: "h" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,
@@ -1176,7 +1176,7 @@ describe("state machine", () => {
         // Job 1: in running, has pendingCompletion
         const w1 = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h1",
+          fnHandle: "h1" as FunctionHandle_future<any>,
           fnName: "fn1",
           fnArgs: {},
           attempts: 0,
@@ -1186,7 +1186,7 @@ describe("state machine", () => {
           internal.worker.runActionWrapper,
           {
             workId: w1,
-            fnHandle: "h1",
+            fnHandle: "h1" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,
@@ -1196,7 +1196,7 @@ describe("state machine", () => {
         // Job 2: has pendingStart + pendingCancelation
         const w2 = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h2",
+          fnHandle: "h2" as FunctionHandle_future<any>,
           fnName: "fn2",
           fnArgs: {},
           attempts: 0,
@@ -1205,7 +1205,7 @@ describe("state machine", () => {
         // Job 3: has pendingStart only
         const w3 = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h3",
+          fnHandle: "h3" as FunctionHandle_future<any>,
           fnName: "fn3",
           fnArgs: {},
           attempts: 0,
@@ -1271,7 +1271,7 @@ describe("state machine", () => {
       const workId = await t.run<Id<"work">>(async (ctx) => {
         const wId = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h",
+          fnHandle: "h" as FunctionHandle_future<any>,
           fnName: "fn",
           fnArgs: {},
           attempts: 1,
@@ -1282,7 +1282,7 @@ describe("state machine", () => {
           internal.worker.runActionWrapper,
           {
             workId: wId,
-            fnHandle: "h",
+            fnHandle: "h" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,

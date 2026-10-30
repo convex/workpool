@@ -55,7 +55,7 @@ export function enqueueFor(kind: PoolKind): {
     };
   }
   return {
-    component: components.oldWorkpool,
+    component: components.oldWorkpool as unknown as ComponentApi,
     enqueueOne: enqueueOld as typeof enqueue,
     enqueueMany: enqueueBatchOld as typeof enqueueBatch,
   };

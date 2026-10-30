@@ -1,5 +1,6 @@
 import {
   type FunctionReference,
+  type FunctionReference_future,
   type FunctionType,
   type FunctionVisibility,
   type GenericActionCtx,
@@ -23,7 +24,9 @@ export type ActionCtx = Pick<
 >;
 
 export function safeFunctionName(
-  f: FunctionReference<FunctionType, FunctionVisibility>,
+  f:
+    | FunctionReference<FunctionType, FunctionVisibility>
+    | FunctionReference_future<FunctionType, FunctionVisibility>,
 ) {
   const address = getFunctionAddress(f);
   return (

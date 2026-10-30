@@ -110,7 +110,10 @@ export type RunResult<Returns = unknown> =
     };
 
 export const vOnCompleteFnContext = v.object({
-  fnHandle: v.string(), // mutation
+  fnHandle: v.function({
+    fnType: "mutation",
+    args: { workId: v.string(), context: v.any(), result: vResult },
+  }),
   context: v.optional(v.any()),
   excludeKinds: v.optional(
     v.array(

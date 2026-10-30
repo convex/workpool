@@ -1,3 +1,4 @@
+import type { FunctionHandle_future } from "convex/server";
 import { convexTest } from "convex-test";
 import {
   afterEach,
@@ -119,7 +120,7 @@ describe("stats", () => {
         // Create a work item
         const workId = await ctx.db.insert("work", {
           fnType: "mutation",
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnName: "testFunction",
           fnArgs: { test: true },
           attempts: 0,
@@ -197,7 +198,7 @@ describe("stats", () => {
           // Create a work item
           const workId = await ctx.db.insert("work", {
             fnType: "mutation",
-            fnHandle: "testHandle",
+            fnHandle: "testHandle" as FunctionHandle_future<any>,
             fnName: `testFunction${i}`,
             fnArgs: { test: i },
             attempts: 0,
@@ -281,7 +282,7 @@ describe("stats", () => {
           // Create a work item
           const workId = await ctx.db.insert("work", {
             fnType: "mutation",
-            fnHandle: "testHandle",
+            fnHandle: "testHandle" as FunctionHandle_future<any>,
             fnName: `testFunction${i}`,
             fnArgs: { test: i },
             attempts: 0,
