@@ -1,4 +1,5 @@
 import { convexTest } from "convex-test";
+import type { FunctionHandle_future } from "convex/server";
 import {
   afterEach,
   assert,
@@ -60,7 +61,7 @@ describe("complete", () => {
 
       const workId = await ctx.db.insert("work", {
         fnType: "mutation",
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         attempts: 0,
@@ -71,7 +72,7 @@ describe("complete", () => {
         internal.worker.runMutationWrapper,
         {
           workId,
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnArgs: { test: "data" },
           fnType: "mutation",
           logLevel: "WARN",
@@ -100,7 +101,7 @@ describe("complete", () => {
     it("should process a successful job and delete the work", async () => {
       // Enqueue a work item
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -148,7 +149,7 @@ describe("complete", () => {
       // completion must still succeed: one bad job would otherwise fail the
       // whole completion batch — and wedge the recovery scan forever.
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { filler: "x".repeat(10_000) },
         fnType: "action",
@@ -192,7 +193,7 @@ describe("complete", () => {
     it("should process a failed job with retry behavior", async () => {
       // Enqueue a work item with retry behavior
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -243,7 +244,7 @@ describe("complete", () => {
     it("should not retry a non-retryable failed job", async () => {
       // The nonRetryable flag should override remaining retry attempts.
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -291,7 +292,7 @@ describe("complete", () => {
     it("should process a failed job that has reached max attempts", async () => {
       // Enqueue a work item with retry behavior
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -349,7 +350,7 @@ describe("complete", () => {
     it("should process a canceled job", async () => {
       // Enqueue a work item
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -454,7 +455,7 @@ describe("complete", () => {
 
       // Enqueue a work item with onComplete handler
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -464,7 +465,7 @@ describe("complete", () => {
           logLevel: "WARN",
         },
         onComplete: {
-          fnHandle: "testOnComplete",
+          fnHandle: "testOnComplete" as FunctionHandle_future<any>,
           context: { someContext: "value" },
         },
       });
@@ -507,7 +508,7 @@ describe("complete", () => {
     it("should handle multiple jobs in a single call", async () => {
       // Enqueue multiple work items
       const workId1 = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: 1 },
         fnType: "mutation",
@@ -519,7 +520,7 @@ describe("complete", () => {
       });
 
       const workId2 = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: 2 },
         fnType: "mutation",
@@ -575,7 +576,7 @@ describe("complete", () => {
     it("should handle mismatched attempt numbers", async () => {
       // Enqueue a work item
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",
@@ -627,7 +628,7 @@ describe("complete", () => {
     it("should only process the first call with the same attempt number for retries", async () => {
       // Enqueue a work item with retry behavior
       const workId = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: "data" },
         fnType: "mutation",

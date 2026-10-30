@@ -4,6 +4,7 @@ import {
   type FunctionArgs,
   type FunctionHandle,
   type FunctionReference,
+  type FunctionReference_future,
   type FunctionType,
   type FunctionVisibility,
   type GenericDataModel,
@@ -94,12 +95,7 @@ export class Workpool {
    */
   async enqueueAction<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "action",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"action", Args, NoInfer<ReturnType>>,
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -133,12 +129,7 @@ export class Workpool {
     ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "action",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"action", Args, NoInfer<ReturnType>>,
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -169,12 +160,7 @@ export class Workpool {
    */
   async enqueueMutation<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "mutation",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"mutation", Args, NoInfer<ReturnType>>,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -200,12 +186,7 @@ export class Workpool {
     ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "mutation",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"mutation", Args, NoInfer<ReturnType>>,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -229,12 +210,7 @@ export class Workpool {
    */
   async enqueueQuery<Args extends DefaultFunctionArgs, Context, ReturnType>(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "query",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"query", Args, NoInfer<ReturnType>>,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -261,12 +237,7 @@ export class Workpool {
     ReturnType,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "query",
-      FunctionVisibility,
-      Args,
-      NoInfer<ReturnType>
-    >,
+    fn: EnqueueableFunction<"query", Args, NoInfer<ReturnType>>,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -484,9 +455,8 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
    * });
    * ```
    */
-  onComplete?: FunctionReference<
+  onComplete?: EnqueueableFunction<
     "mutation",
-    FunctionVisibility,
     OnCompleteArgs<Context, ReturnValue>
   > | null;
 
@@ -524,6 +494,18 @@ export type EnqueueOptions<Context = unknown, ReturnValue = unknown> = {
       runAt?: never;
     }
 );
+
+/**
+ * A function reference, or a handle typed as `FunctionHandle_future` such as
+ * one validated by `v.function()`.
+ */
+export type EnqueueableFunction<
+  Type extends FunctionType,
+  Args extends DefaultFunctionArgs = any,
+  ReturnType = any,
+> =
+  | FunctionReference<Type, FunctionVisibility, Args, ReturnType>
+  | FunctionReference_future<Type, FunctionVisibility, Args, ReturnType>;
 
 export type OnCompleteArgs<Context = unknown, Returns = unknown> = {
   /**
@@ -566,7 +548,7 @@ function getRetryBehavior(
 
 async function enqueueArgs<Context, ReturnType>(
   fn:
-    | FunctionReference<FunctionType, FunctionVisibility>
+    | EnqueueableFunction<FunctionType>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
     | (EnqueueOptions<Context, ReturnType> &
@@ -630,7 +612,7 @@ export async function enqueueBatch<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
+  fn: EnqueueableFunction<FnType, Args, NoInfer<ReturnType>>,
   fnArgsArray: Array<Args>,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
@@ -693,7 +675,7 @@ export async function enqueue<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
+  fn: EnqueueableFunction<FnType, Args, NoInfer<ReturnType>>,
   fnArgs: Args,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;

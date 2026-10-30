@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FunctionHandle_future } from "convex/server";
 import { components, internal } from "./_generated/api.js";
 import { kickMainLoop } from "./kick.js";
 import { WORKER_NAME } from "./shared.js";
@@ -16,7 +17,7 @@ describe("kickMainLoop", () => {
       });
       const workId = await ctx.db.insert("work", {
         fnType: "action",
-        fnHandle: "test_handle",
+        fnHandle: "test_handle" as FunctionHandle_future<any>,
         fnName: "test_handle",
         fnArgs: {},
         attempts: 0,
@@ -26,7 +27,7 @@ describe("kickMainLoop", () => {
         internal.worker.runActionWrapper,
         {
           workId,
-          fnHandle: "test_handle",
+          fnHandle: "test_handle" as FunctionHandle_future<any>,
           fnArgs: {},
           logLevel: "WARN",
           attempt: 0,
