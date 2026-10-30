@@ -1,16 +1,10 @@
-import type { FunctionHandle } from "convex/server";
 import { getConvexSize, type Infer, v } from "convex/values";
 import type { Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import {
-  getCurrentSegment,
-  type OnCompleteArgs,
-  type RunResult,
-  vResult,
-} from "./shared.js";
+import { getCurrentSegment, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
 
@@ -140,11 +134,7 @@ export async function completeHandler(
               }
             }
 
-            const handle = work.onComplete.fnHandle as FunctionHandle<
-              "mutation",
-              OnCompleteArgs,
-              void
-            >;
+            const handle = work.onComplete.fnHandle;
             const onCompleteArgs = {
               workId: work._id,
               context,
