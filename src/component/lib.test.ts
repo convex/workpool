@@ -1,4 +1,5 @@
 import { convexTest } from "convex-test";
+import type { FunctionHandle_future } from "convex/server";
 import {
   afterEach,
   assert,
@@ -41,10 +42,16 @@ describe("lib", () => {
       "accepts legacy, empty, and populated callback exclusions (batch: %s)",
       async (batch) => {
         const callbacks = [
-          { fnHandle: "callback", context: { key: "legacy" } },
-          { fnHandle: "callback", excludeKinds: [] },
           {
-            fnHandle: "callback",
+            fnHandle: "callback" as FunctionHandle_future<any>,
+            context: { key: "legacy" },
+          },
+          {
+            fnHandle: "callback" as FunctionHandle_future<any>,
+            excludeKinds: [],
+          },
+          {
+            fnHandle: "callback" as FunctionHandle_future<any>,
             excludeKinds: ["failed", "canceled"] as const,
           },
         ].map((callback) => ({
@@ -52,7 +59,7 @@ describe("lib", () => {
           excludeKinds: callback.excludeKinds && [...callback.excludeKinds],
         }));
         const items = callbacks.map((onComplete) => ({
-          fnHandle: "workHandle",
+          fnHandle: "workHandle" as FunctionHandle_future<any>,
           fnName: "work",
           fnArgs: {},
           fnType: "mutation" as const,
@@ -80,7 +87,7 @@ describe("lib", () => {
       "rejects invalid status filters before writing any work (batch: %s)",
       async (batch) => {
         const item = {
-          fnHandle: "workHandle",
+          fnHandle: "workHandle" as FunctionHandle_future<any>,
           fnName: "work",
           fnArgs: { payload: "x".repeat(10_000) },
           fnType: "mutation" as const,
@@ -89,7 +96,7 @@ describe("lib", () => {
         const invalid = {
           ...item,
           onComplete: {
-            fnHandle: "callback",
+            fnHandle: "callback" as FunctionHandle_future<any>,
             // @ts-expect-error JavaScript callers can send an invalid kind.
             excludeKinds: ["running"] as ("success" | "failed" | "canceled")[],
           },
@@ -113,7 +120,7 @@ describe("lib", () => {
 
     it("should successfully enqueue a work item", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -131,7 +138,7 @@ describe("lib", () => {
 
     it("records the queue entry on the work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: {},
         fnType: "mutation",
@@ -150,7 +157,7 @@ describe("lib", () => {
     it("should throw error if maxParallelism is too high", async () => {
       await expect(
         t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnName: "testFunction",
           fnArgs: { test: true },
           fnType: "mutation",
@@ -166,7 +173,7 @@ describe("lib", () => {
     it("should throw error if maxParallelism is too low", async () => {
       await expect(
         t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnName: "testFunction",
           fnArgs: { test: true },
           fnType: "mutation",
@@ -183,7 +190,7 @@ describe("lib", () => {
   describe("cancel", () => {
     it("should successfully queue a work item for cancelation", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -211,7 +218,7 @@ describe("lib", () => {
 
     it("should not create duplicate cancelation requests", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -246,7 +253,7 @@ describe("lib", () => {
 
     it("should not create cancelation for non-existent work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -283,7 +290,7 @@ describe("lib", () => {
       const ids: WorkId[] = [];
       for (let i = 0; i < 3; i++) {
         const id = await t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnName: "testFunction",
           fnArgs: { test: i },
           fnType: "mutation",
@@ -318,7 +325,7 @@ describe("lib", () => {
       // Create PAGE_SIZE + 1 work items to trigger pagination
       for (let i = 0; i < PAGE_SIZE + 1; i++) {
         await t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
+          fnHandle: "testHandle" as FunctionHandle_future<any>,
           fnName: "testFunction",
           fnArgs: { test: i },
           fnType: "mutation",
@@ -364,7 +371,7 @@ describe("lib", () => {
   describe("status", () => {
     it("should return finished state for non-existent work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -384,7 +391,7 @@ describe("lib", () => {
 
     it("should return pending state for newly enqueued work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -410,7 +417,7 @@ describe("lib", () => {
 
     it("should return running state when work is in progress", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -435,7 +442,7 @@ describe("lib", () => {
 
     it("should return pending state for work pending retry", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -473,7 +480,7 @@ describe("lib", () => {
 
     it("should return running state for work with pendingCancelation", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",
@@ -506,7 +513,7 @@ describe("lib", () => {
 
     it("should return running state for work with pendingCompletion but retry=false", async () => {
       const id = await t.mutation(api.lib.enqueue, {
-        fnHandle: "testHandle",
+        fnHandle: "testHandle" as FunctionHandle_future<any>,
         fnName: "testFunction",
         fnArgs: { test: true },
         fnType: "mutation",

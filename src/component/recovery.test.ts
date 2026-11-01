@@ -3,6 +3,7 @@ import { createFunctionHandle, makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 import type {
   DocumentByName,
+  FunctionHandle_future,
   GenericDatabaseReader,
   GenericDataModel,
   SystemDataModel,
@@ -62,7 +63,7 @@ describe("recovery", () => {
   ) {
     return ctx.db.insert("work", {
       fnType: "action",
-      fnHandle: "test_handle",
+      fnHandle: "test_handle" as FunctionHandle_future<any>,
       fnName: "test_handle",
       fnArgs: {},
       attempts: 0,
@@ -77,7 +78,7 @@ describe("recovery", () => {
   ) {
     return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
       workId,
-      fnHandle: "test_handle",
+      fnHandle: "test_handle" as FunctionHandle_future<any>,
       fnArgs: {},
       logLevel: "WARN",
       attempt: 0,
@@ -346,7 +347,7 @@ describe("recovery", () => {
             args: [
               {
                 workId,
-                fnHandle: "test_handle",
+                fnHandle: "test_handle" as FunctionHandle_future<any>,
                 fnArgs: {},
                 logLevel: "WARN",
                 attempt: 0,
@@ -408,7 +409,7 @@ describe("recovery", () => {
             args: [
               {
                 workId,
-                fnHandle: "test_handle",
+                fnHandle: "test_handle" as FunctionHandle_future<any>,
                 fnArgs: {},
                 logLevel: "WARN",
                 attempt: 0,
@@ -473,7 +474,7 @@ describe("recovery", () => {
             args: [
               {
                 workId: workId1,
-                fnHandle: "test_handle",
+                fnHandle: "test_handle" as FunctionHandle_future<any>,
                 fnArgs: { test: 1 },
                 logLevel: "WARN",
                 attempt: 0,
@@ -492,7 +493,7 @@ describe("recovery", () => {
             args: [
               {
                 workId: workId2,
-                fnHandle: "test_handle",
+                fnHandle: "test_handle" as FunctionHandle_future<any>,
                 fnArgs: { test: 2 },
                 logLevel: "WARN",
                 attempt: 0,
@@ -575,7 +576,7 @@ describe("recovery", () => {
             args: [
               {
                 workId,
-                fnHandle: "test_handle",
+                fnHandle: "test_handle" as FunctionHandle_future<any>,
                 fnArgs: {},
                 logLevel: "WARN",
                 attempt: 0,

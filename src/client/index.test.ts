@@ -4,6 +4,7 @@ import {
   makeFunctionReference,
   type DataModelFromSchemaDefinition,
   type FunctionArgs,
+  type FunctionHandle_future,
   type GenericDataModel,
   type GenericMutationCtx,
 } from "convex/server";
@@ -795,6 +796,40 @@ test("onComplete retains context and return value types", () => {
       action,
       { value: 1 },
       { onComplete, context: { label: "job" } },
+    );
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+});
+
+test("enqueue accepts typed function handles", () => {
+  const handle = "function://work" as FunctionHandle_future<
+    "action",
+    { value: number },
+    number
+  >;
+  const onCompleteHandle = "function://done" as FunctionHandle_future<
+    "mutation",
+    OnCompleteArgs<{ label: string }, number>
+  >;
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    // @ts-expect-error The handle requires a number value.
+    void pool.enqueueAction(ctx, handle, { value: "1" });
+    // @ts-expect-error The handle's validator would reject the extra argument.
+    void pool.enqueueAction(ctx, handle, { value: 1, extra: 1 });
+    // @ts-expect-error The handle is for an action.
+    void pool.enqueueMutation(ctx, handle, { value: 1 });
+    void pool.enqueueAction(
+      ctx,
+      handle,
+      { value: 1 },
+      // @ts-expect-error The callback requires a string label.
+      { onComplete: onCompleteHandle, context: { label: 1 } },
+    );
+    void pool.enqueueActionBatch(ctx, handle, [{ value: 1 }]);
+    return pool.enqueueAction(
+      ctx,
+      handle,
+      { value: 1 },
+      { onComplete: onCompleteHandle, context: { label: "job" } },
     );
   }).returns.toEqualTypeOf<Promise<WorkId>>();
 });

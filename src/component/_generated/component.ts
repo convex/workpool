@@ -66,13 +66,28 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             maxParallelism?: number;
           };
           fnArgs: any;
-          fnHandle: string;
+          fnHandle: import("convex/server").FunctionHandle_future<
+            any,
+            any,
+            any
+          >;
           fnName: string;
           fnType: "action" | "mutation" | "query";
           onComplete?: {
             context?: any;
             excludeKinds?: Array<"success" | "failed" | "canceled">;
-            fnHandle: string;
+            fnHandle: import("convex/server").FunctionHandle_future<
+              "mutation",
+              {
+                context: any;
+                result:
+                  | { kind: "success"; returnValue: any }
+                  | { error: string; kind: "failed" }
+                  | { kind: "canceled" };
+                workId: string;
+              },
+              any
+            >;
           };
           retryBehavior?: {
             base: number;
@@ -94,13 +109,28 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           };
           items: Array<{
             fnArgs: any;
-            fnHandle: string;
+            fnHandle: import("convex/server").FunctionHandle_future<
+              any,
+              any,
+              any
+            >;
             fnName: string;
             fnType: "action" | "mutation" | "query";
             onComplete?: {
               context?: any;
               excludeKinds?: Array<"success" | "failed" | "canceled">;
-              fnHandle: string;
+              fnHandle: import("convex/server").FunctionHandle_future<
+                "mutation",
+                {
+                  context: any;
+                  result:
+                    | { kind: "success"; returnValue: any }
+                    | { error: string; kind: "failed" }
+                    | { kind: "canceled" };
+                  workId: string;
+                },
+                any
+              >;
             };
             retryBehavior?: {
               base: number;

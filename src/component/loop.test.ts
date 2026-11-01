@@ -1,4 +1,4 @@
-import type { WithoutSystemFields } from "convex/server";
+import type { FunctionHandle_future, WithoutSystemFields } from "convex/server";
 import {
   afterEach,
   assert,
@@ -106,7 +106,7 @@ describe("loop", () => {
     return t.run(async (ctx) => {
       const workId = await ctx.db.insert("work", {
         fnType: "action",
-        fnHandle: "test_handle",
+        fnHandle: "test_handle" as FunctionHandle_future<any>,
         fnName: "test_handle",
         fnArgs: {},
         attempts: 0,
@@ -339,7 +339,7 @@ describe("loop", () => {
         const workId = await t.run(async (ctx) => {
           return ctx.db.insert("work", {
             fnType: "action",
-            fnHandle: "h",
+            fnHandle: "h" as FunctionHandle_future<any>,
             fnName: "h",
             fnArgs: {},
             attempts: 0,
@@ -348,7 +348,7 @@ describe("loop", () => {
         const scheduledId = await t.run(async (ctx) => {
           return ctx.scheduler.runAfter(0, internal.worker.runActionWrapper, {
             workId,
-            fnHandle: "h",
+            fnHandle: "h" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,
@@ -588,7 +588,7 @@ describe("loop", () => {
       const workId = await t.run(async (ctx) => {
         const wid = await ctx.db.insert("work", {
           fnType: "action",
-          fnHandle: "h",
+          fnHandle: "h" as FunctionHandle_future<any>,
           fnName: "h",
           fnArgs: {},
           attempts: 0,
@@ -598,7 +598,7 @@ describe("loop", () => {
           internal.worker.runActionWrapper,
           {
             workId: wid,
-            fnHandle: "h",
+            fnHandle: "h" as FunctionHandle_future<any>,
             fnArgs: {},
             logLevel: "WARN",
             attempt: 0,

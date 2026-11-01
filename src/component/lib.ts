@@ -34,7 +34,7 @@ const MAX_DOC_SIZE = 1_000_000; // Some buffer for 1MiB actual limit
 const PAYLOAD_DOC_OVERHEAD = 78; // Size of { args: null, context: null }
 
 const itemArgs = {
-  fnHandle: v.string(),
+  fnHandle: v.function(),
   fnName: v.string(),
   fnArgs: v.any(),
   fnType,
