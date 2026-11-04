@@ -262,6 +262,10 @@ To get the result of your function, you can either write to the database from
 within your function, call or schedule another function from there, or use the
 `onComplete` handler to respond to the job result.
 
+If a job throws a `ConvexError`, its failed result also includes `errorData`,
+containing the original `ConvexError.data`. The `error` string remains available
+for logging. Ordinary errors and older recorded failures have no `errorData`.
+
 ## Get started
 
 ### Pre-requisite: Convex

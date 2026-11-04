@@ -13,7 +13,7 @@ import {
   internalQuery,
   type ActionCtx,
 } from "./_generated/server.js";
-import { getNonRetryableErrorMessage, isNonRetryableError } from "./errors.js";
+import { failedResult, isNonRetryableError } from "./errors.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import type { CompleteJob } from "./complete.js";
@@ -66,7 +66,7 @@ export const runMutationWrapper = internalMutation({
       });
     } catch (e: unknown) {
       console.error(e);
-      const runResult = { kind: "failed" as const, error: formatError(e) };
+      const runResult = failedResult(e);
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
         jobs: [
           {
@@ -80,17 +80,6 @@ export const runMutationWrapper = internalMutation({
     }
   },
 });
-
-function formatError(e: unknown) {
-  const nonRetryableMessage = getNonRetryableErrorMessage(e);
-  if (nonRetryableMessage !== undefined) {
-    return nonRetryableMessage;
-  }
-  if (e instanceof Error) {
-    return e.message;
-  }
-  return String(e);
-}
 
 /** Legacy entrypoint, keeping around for graceful upgrade for scheduled functions in flight */
 export const runActionWrapper = internalAction({
@@ -193,7 +182,7 @@ async function runOne(
     console.error(e);
     // We let the main loop handle the retries.
     return {
-      runResult: { kind: "failed", error: formatError(e) } satisfies RunResult,
+      runResult: failedResult(e),
       nonRetryable: isNonRetryableError(e),
     };
   }
