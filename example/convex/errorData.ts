@@ -1,5 +1,6 @@
 import { vOnCompleteArgs } from "@convex-dev/workpool";
 import { ConvexError, v, type Value } from "convex/values";
+import { internal } from "./_generated/api.js";
 import {
   internalAction,
   internalMutation,
@@ -24,7 +25,19 @@ export const failingMutation = internalMutation({
 export const failingAction = internalAction({
   args,
   returns: v.null(),
-  handler: fail,
+  handler: async (ctx, args): Promise<never> => {
+    await ctx.runMutation(internal.errorData.recordActionAttempt, {});
+    return fail(ctx, args);
+  },
+});
+
+export const recordActionAttempt = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    await ctx.db.insert("data", { misc: { kind: "attempt" } });
+    return null;
+  },
 });
 
 export const onComplete = internalMutation({

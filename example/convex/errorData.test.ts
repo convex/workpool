@@ -47,9 +47,12 @@ test.each(["query", "mutation", "action"] as const)(
       }
     });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    const results = await t.query((ctx) => ctx.db.query("data").take(2));
-    expect(results).toHaveLength(1);
-    expect(results[0].misc).toMatchObject({ kind: "failed", errorData: data });
-    expect(typeof results[0].misc.error).toBe("string");
+    const events = await t.query((ctx) => ctx.db.query("data").take(4));
+    expect(events.map(({ misc }) => misc.kind)).toEqual(
+      functionType === "action" ? ["attempt", "attempt", "failed"] : ["failed"],
+    );
+    const result = events[events.length - 1].misc;
+    expect(result).toMatchObject({ kind: "failed", errorData: data });
+    expect(typeof result.error).toBe("string");
   },
 );
