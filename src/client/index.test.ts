@@ -334,6 +334,10 @@ describe("completion callbacks through the client and scheduler", () => {
     expect((await events("terminal"))[1].result).toEqual({
       kind: "failed",
       error: "work failed",
+      errorData: {
+        __convexWorkpoolNonRetryable: true,
+        message: "work failed",
+      },
     });
   });
 
