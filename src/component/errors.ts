@@ -1,4 +1,17 @@
 import { ConvexError } from "convex/values";
+import type { RunResult } from "./shared.js";
+
+export function failedResult(
+  error: unknown,
+): Extract<RunResult, { kind: "failed" }> {
+  return {
+    kind: "failed",
+    error:
+      getNonRetryableErrorMessage(error) ??
+      (error instanceof Error ? error.message : String(error)),
+    ...(error instanceof ConvexError ? { errorData: error.data ?? null } : {}),
+  };
+}
 
 const NON_RETRYABLE_ERROR_MARKER = "__convexWorkpoolNonRetryable";
 
