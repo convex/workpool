@@ -1,4 +1,4 @@
-import type { Infer, Validator, VAny } from "convex/values";
+import type { Infer, Validator, Value, VAny } from "convex/values";
 
 import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
@@ -84,6 +84,7 @@ export function vRunResult<RV extends Validator<any, any, any> = VAny>(
     v.object({
       kind: v.literal("failed"),
       error: v.string(),
+      errorData: v.optional(v.any()),
     }),
     v.object({
       kind: v.literal("canceled"),
@@ -104,6 +105,8 @@ export type RunResult<Returns = unknown> =
        * The error message of the run, if it failed.
        */
       error: string;
+      /** The original ConvexError data, when the job threw a ConvexError. */
+      errorData?: Value;
     }
   | {
       kind: "canceled";

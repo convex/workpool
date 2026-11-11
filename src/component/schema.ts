@@ -57,6 +57,8 @@ export default defineSchema({
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
+    // May point to a deleted entry after starting, or be absent on older work.
+    pendingStartId: v.optional(v.id("pendingStart")),
   }),
 
   // Written on enqueue & rescheduled for retry, read & deleted by `main`.

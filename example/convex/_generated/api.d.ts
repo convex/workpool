@@ -9,6 +9,7 @@
  */
 
 import type * as crons from "../crons.js";
+import type * as errorData from "../errorData.js";
 import type * as example from "../example.js";
 import type * as staticHosting from "../staticHosting.js";
 import type * as test_dashboard from "../test/dashboard.js";
@@ -35,6 +36,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   crons: typeof crons;
+  errorData: typeof errorData;
   example: typeof example;
   staticHosting: typeof staticHosting;
   "test/dashboard": typeof test_dashboard;

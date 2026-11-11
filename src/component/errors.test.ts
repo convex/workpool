@@ -4,11 +4,50 @@ import {
   getNonRetryableErrorMessage,
   isNonRetryableError,
   NonRetryableError,
+  failedResult,
 } from "./errors.js";
 
 class CustomTerminalError extends NonRetryableError {}
 
 describe("errors", () => {
+  it.each([
+    null,
+    false,
+    0,
+    "",
+    "invalid input",
+    { code: "INVALID", count: 7n },
+  ])("preserves ConvexError data: %s", (data) => {
+    const error = new ConvexError(data);
+    expect(failedResult(error)).toEqual({
+      kind: "failed",
+      error: error.message,
+      errorData: data,
+    });
+  });
+
+  it("keeps ordinary failures as strings, even if they have a data property", () => {
+    expect(
+      failedResult(Object.assign(new Error("failure"), { data: "extra" })),
+    ).toEqual({
+      kind: "failed",
+      error: "failure",
+    });
+    expect(failedResult("failure")).toEqual({
+      kind: "failed",
+      error: "failure",
+    });
+  });
+
+  it("preserves NonRetryableError data without changing its error message", () => {
+    const error = new NonRetryableError("invalid input");
+    expect(failedResult(error)).toEqual({
+      kind: "failed",
+      error: "invalid input",
+      errorData: error.data,
+    });
+  });
+
   it("identifies non-retryable error subclasses", () => {
     // Users should be able to model domain-specific terminal failures.
     const error = new CustomTerminalError("invalid input");
