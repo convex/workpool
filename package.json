@@ -78,7 +78,7 @@
     "@changesets/cli": "3.0.3",
     "@convex-dev/eslint-plugin": "5.0.0",
     "@convex-dev/static-hosting": "0.2.0",
-    "@convex-dev/workpool-old": "npm:@convex-dev/workpool@0.4.15",
+    "@convex-dev/workpool-old": "npm:@convex-dev/workpool@0.4.7",
     "@edge-runtime/vm": "5.0.0",
     "@eslint/eslintrc": "3.3.7",
     "@eslint/js": "10.0.1",
