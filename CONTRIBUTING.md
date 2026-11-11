@@ -74,8 +74,9 @@ npx changeset version
 ```
 
 Review and commit the version, changelog, and consumed changesets, then merge
-through a checked PR. A push to main stages the latest version-bump commit in
-that push.
+through a checked PR. A push to main containing a version bump stages the tip
+commit of that push. The built source must match the workflow run commit for npm
+provenance verification.
 
 For a branch prerelease, prepare a prerelease version with Changesets and
 dispatch **Release** from the Actions page on that branch. The first prerelease
@@ -84,17 +85,21 @@ main.
 
 ### Recovery
 
-If staging has not been attempted, dispatch **Release** on the appropriate ref
-with the 40-character SHA of a version-bump commit reachable from that ref. Once
-staging starts, inspect npm before retrying: dispatching **Release** runs
+Dispatch **Release** on the appropriate ref to release its current tip,
+including fixes made after the version bump. The optional commit input is an
+expected 40-character SHA and must equal the selected ref at dispatch time; it
+cannot select an older commit. Stable releases still require main.
+
+Once staging starts, inspect npm before retrying: dispatching **Release** runs
 `npm stage publish` again. If the package is already staged, retry only the
 failed tag job or, after verifying the staged version, create its source tag at
-the version-bump commit.
+the workflow run commit. If staging failed and npm confirms the version is
+absent, merge any necessary fixes and dispatch from the corrected main tip.
 
-| Failure                                         | Recovery                                                                         |
-| ----------------------------------------------- | -------------------------------------------------------------------------------- |
-| Failure before staging was attempted            | Retry failed jobs for the same commit.                                           |
-| Staging succeeded; tagging failed               | Retry only the failed tag job, or create the source tag after verifying staging. |
-| Upload outcome uncertain                        | Inspect npm; retry staging only if absent, or recover the tag if already staged. |
-| Fix requires changing the release commit's code | Prepare a new version-bump commit.                                               |
-| Candidate rejected after staging                | Leave its tag and prepare a new version.                                         |
+| Failure                                        | Recovery                                                                         |
+| ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| Failure before staging was attempted           | Retry failed jobs for the same commit.                                           |
+| Staging succeeded; tagging failed              | Retry only the failed tag job, or create the source tag after verifying staging. |
+| Upload outcome uncertain                       | Inspect npm; retry staging only if absent, or recover the tag if already staged. |
+| Already-staged candidate requires code changes | Prepare a new version-bump commit.                                               |
+| Candidate rejected after staging               | Leave its tag and prepare a new version.                                         |

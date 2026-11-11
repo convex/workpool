@@ -210,8 +210,7 @@ export default internalAction({
     const tps = (completedCount / total) * 1000;
     const msPerTask = total / completedCount;
     const latency = metrics.latency as
-      | { p50: number; p95: number; p99: number; max: number }
-      | undefined;
+      { p50: number; p95: number; p99: number; max: number } | undefined;
 
     console.log(`\n=== ${scenarioLabel} ===`);
     console.log(

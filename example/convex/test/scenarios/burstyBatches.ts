@@ -162,8 +162,7 @@ export default internalAction({
 
     // Log results
     const latency = metrics!.latency as
-      | { p50: number; p95: number; p99: number; max: number }
-      | undefined;
+      { p50: number; p95: number; p99: number; max: number } | undefined;
     const waves = metrics!.waves as
       | Array<{ wave: number; count: number; p50?: number; p99?: number }>
       | undefined;

@@ -1,1 +1,4 @@
 .context/
+
+# Local anonymous test deployment state
+.convex/

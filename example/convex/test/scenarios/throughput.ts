@@ -131,8 +131,7 @@ export default internalAction({
     const totalDurationMs = metrics!.totalDurationMs as number;
     const completedCount = metrics!.completedCount as number;
     const latency = metrics!.latency as
-      | { p50: number; p95: number; p99: number; max: number }
-      | undefined;
+      { p50: number; p95: number; p99: number; max: number } | undefined;
 
     const tasksPerSec = ((completedCount / totalDurationMs) * 1000).toFixed(0);
     console.log(`\n=== throughput results ===`);
