@@ -34,8 +34,7 @@ type WorkConfig = {
 };
 
 type PendingCompletionConfig =
-  | false
-  | { retry: boolean; resultKind: "success" | "failed" | "canceled" };
+  false | { retry: boolean; resultKind: "success" | "failed" | "canceled" };
 
 /** Declarative description of a job's composite state across all tables. */
 type CompositeState = {
