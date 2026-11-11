@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.16
+
+### Patch Changes
+
+- 3202652: Preserve `ConvexError` data in failed job results (#257).
+
 ## 0.4.15
 
 - Upgrades @convex-dev/batch-worker to 0.3. Requires Convex 1.43 or later.
