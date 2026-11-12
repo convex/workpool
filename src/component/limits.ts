@@ -12,7 +12,7 @@ const COMPLETION_RESERVE = {
   documentsWritten: 16,
   functionsScheduled: 4,
   scheduledFunctionArgsBytes: 1024 * 1024,
-} satisfies Required<TransactionLimits>;
+} satisfies TransactionLimits;
 
 export async function completionTransactionLimits(
   ctx: MutationCtx,
@@ -21,7 +21,7 @@ export async function completionTransactionLimits(
   const limits: TransactionLimits = {};
   for (const key of Object.keys(
     COMPLETION_RESERVE,
-  ) as (keyof TransactionLimits)[]) {
+  ) as (keyof typeof COMPLETION_RESERVE)[]) {
     limits[key] = Math.max(0, metrics[key].remaining - COMPLETION_RESERVE[key]);
   }
   return limits;
