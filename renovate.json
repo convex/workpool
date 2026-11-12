@@ -17,6 +17,10 @@
     {
       "matchDepTypes": ["devDependencies"],
       "automerge": true
+    },
+    {
+      "matchDepNames": ["@convex-dev/workpool-old"],
+      "enabled": false
     }
   ],
   "constraints": {
