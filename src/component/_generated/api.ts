@@ -14,6 +14,7 @@ import type * as danger from "../danger.js";
 import type * as errors from "../errors.js";
 import type * as kick from "../kick.js";
 import type * as lib from "../lib.js";
+import type * as limits from "../limits.js";
 import type * as logging from "../logging.js";
 import type * as loop from "../loop.js";
 import type * as migrations from "../migrations.js";
@@ -36,6 +37,7 @@ const fullApi: ApiFromModules<{
   errors: typeof errors;
   kick: typeof kick;
   lib: typeof lib;
+  limits: typeof limits;
   logging: typeof logging;
   loop: typeof loop;
   migrations: typeof migrations;
