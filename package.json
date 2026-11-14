@@ -89,7 +89,7 @@
     "@vitest/coverage-v8": "5.1.0",
     "chokidar-cli": "3.0.0",
     "convex": "1.49.0",
-    "convex-helpers": "0.1.134",
+    "convex-helpers": "0.1.135",
     "convex-test": "0.0.69",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
@@ -102,7 +102,7 @@
     "recharts": "3.10.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.2",
-    "vite": "8.3.7",
+    "vite": "8.3.8",
     "vitest": "5.1.0"
   },
   "types": "./dist/client/index.d.ts",
