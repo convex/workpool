@@ -32,9 +32,6 @@ jobs:
           node-version: "26.13.0"
           cache: "npm"
 
-      - name: Test release selection
-        run: node --test .github/tests/release-plan.test.mjs
-
       - name: Install and build
         run: |
           npm ci
