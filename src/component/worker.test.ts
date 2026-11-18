@@ -154,7 +154,6 @@ describe("transactional mutation completion", () => {
       await ctx.db.insert("globals", { maxParallelism: 1, logLevel: "ERROR" });
       // The main loop normally records this when it schedules the wrapper.
       await ctx.db.insert("internalState", {
-        generation: 0n,
         segmentCursors: { incoming: 0n, completion: 0n, cancelation: 0n },
         lastRecovery: 0n,
         report: {
