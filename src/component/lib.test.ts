@@ -362,6 +362,38 @@ describe("lib", () => {
   });
 
   describe("status", () => {
+    it("temporarily reports queued and running legacy work as pending without queue pointers", async () => {
+      const { queuedId, runningId } = await t.run(async (ctx) => {
+        const work = {
+          fnType: "action" as const,
+          fnHandle: "testHandle",
+          fnName: "testFunction",
+          attempts: 0,
+        };
+        const queuedId = await ctx.db.insert("work", work);
+        const runningId = await ctx.db.insert("work", work);
+        await ctx.db.insert("pendingStart", {
+          workId: queuedId,
+          segment: BigInt(Math.floor(Date.now() / 100)),
+        });
+        return { queuedId, runningId };
+      });
+      expect(await t.query(api.lib.status, { id: queuedId })).toEqual({
+        state: "pending",
+        previousAttempts: 0,
+      });
+      expect(await t.query(api.lib.status, { id: runningId })).toEqual({
+        state: "pending",
+        previousAttempts: 0,
+      });
+      expect(
+        await t.query(api.lib.statusBatch, { ids: [queuedId, runningId] }),
+      ).toEqual([
+        { state: "pending", previousAttempts: 0 },
+        { state: "pending", previousAttempts: 0 },
+      ]);
+    });
+
     it("should return finished state for non-existent work", async () => {
       const id = await t.mutation(api.lib.enqueue, {
         fnHandle: "testHandle",
