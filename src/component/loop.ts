@@ -632,15 +632,26 @@ async function handleStart(
   console.debug(`[main] scheduling ${pending.length} pending work`);
   const entries = await Promise.all(
     pending.map(async (entry) => {
-      const [doc, work] = await Promise.all([
+      const [doc, work, pendingCancelation] = await Promise.all([
         ctx.db.get("pendingStart", entry.pendingId),
         ctx.db.get("work", entry.workId),
+        ctx.db
+          .query("pendingCancelation")
+          .withIndex("workId", (q) => q.eq("workId", entry.workId))
+          .first(),
       ]);
-      return { ...entry, doc, work };
+      return { ...entry, doc, work, pendingCancelation };
     }),
   );
   const starts: { work: Doc<"work">; lagMs: number }[] = [];
-  for (const { pendingId, workId, segment, doc, work } of entries) {
+  for (const {
+    pendingId,
+    workId,
+    segment,
+    doc,
+    work,
+    pendingCancelation,
+  } of entries) {
     if (!doc) continue;
     await ctx.db.delete("pendingStart", pendingId);
     if (state.running.some((r) => r.workId === workId)) {
@@ -651,10 +662,6 @@ async function handleStart(
       console.error(`Trying to start, but work not found: ${workId}`);
       continue;
     }
-    const pendingCancelation = await ctx.db
-      .query("pendingCancelation")
-      .withIndex("workId", (q) => q.eq("workId", workId))
-      .first();
     if (work.canceled || pendingCancelation) {
       if (!work.canceled) {
         await ctx.db.patch("work", workId, { canceled: true });
