@@ -712,7 +712,9 @@ async function beginWorkBatch(
     started: number;
   }> = [];
   const actionOrQuery = starts.filter(
-    ({ work }) => work.fnType === "action" || work.fnType === "query",
+    ({ work }) =>
+      work.fnType === "action" ||
+      (work.fnType === "query" && !work.completeTransactionally),
   );
   for (let i = 0; i < actionOrQuery.length; i += START_BATCH_SIZE) {
     const batch = actionOrQuery.slice(i, i + START_BATCH_SIZE);
@@ -739,7 +741,9 @@ async function beginWorkBatch(
   }
 
   const mutationStarts = starts.filter(
-    ({ work }) => work.fnType === "mutation",
+    ({ work }) =>
+      work.fnType === "mutation" ||
+      (work.fnType === "query" && work.completeTransactionally),
   );
   for (const { work, lagMs } of mutationStarts) {
     const scheduledId = await ctx.scheduler.runAfter(
@@ -752,7 +756,7 @@ async function beginWorkBatch(
         payloadId: work.payloadId,
         logLevel,
         attempt: work.attempts,
-        fnType: "mutation",
+        fnType: work.fnType === "query" ? "query" : "mutation",
         completeTransactionally: work.completeTransactionally,
       },
     );
