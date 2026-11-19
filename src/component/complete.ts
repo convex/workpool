@@ -1,6 +1,6 @@
 import type { FunctionHandle } from "convex/server";
 import { getConvexSize, type Infer, v } from "convex/values";
-import type { Id } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
@@ -11,6 +11,7 @@ import {
   type RunResult,
   vResult,
 } from "./shared.js";
+import { layoutPayload } from "./payload.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
 
@@ -25,6 +26,13 @@ const completeArgs = v.object({
       nonRetryable: v.optional(v.boolean()),
       // The job threw RescheduleError: run it again without using an attempt.
       reschedule: v.optional(v.object({ delayMs: v.number() })),
+      // The job returned continueWith: run it again with these args.
+      continueWith: v.optional(
+        v.object({
+          args: v.record(v.string(), v.any()),
+          delayMs: v.number(),
+        }),
+      ),
       // TODO: need to be careful about removing this field later
       runOnCompleteInline: v.optional(v.boolean()),
     }),
@@ -128,9 +136,24 @@ export async function completeHandler(
         console.warn(`[complete] ${job.workId} already in pendingCompletion`);
         return;
       }
+      if (job.continueWith) {
+        try {
+          await continueWithArgs(ctx, work, job.continueWith.args);
+        } catch (e) {
+          // The next step can't be stored, so the job fails here.
+          console.error(`[complete] ${job.workId} can't continue: ${e}`);
+          job.runResult = {
+            kind: "failed",
+            error: `Couldn't continue with new args: ${e instanceof Error ? e.message : String(e)}`,
+          };
+          job.nonRetryable = true;
+          delete job.continueWith;
+        }
+      }
+      const reschedule = job.reschedule ?? job.continueWith;
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
-        !!job.reschedule ||
+        !!reschedule ||
         (job.runResult.kind === "failed" &&
           !job.nonRetryable &&
           !!maxAttempts &&
@@ -214,9 +237,7 @@ export async function completeHandler(
           runResult: stripResult(job.runResult),
           workId: job.workId,
           retry,
-          ...(job.reschedule
-            ? { rescheduleDelayMs: job.reschedule.delayMs }
-            : {}),
+          ...(reschedule ? { rescheduleDelayMs: reschedule.delayMs } : {}),
         });
       }
     }),
@@ -237,6 +258,43 @@ export async function completeHandler(
       ),
     );
   }
+}
+
+/**
+ * Stores the args for a job's next step, and starts its retry budget over.
+ * Throws if the args are too large to store.
+ */
+async function continueWithArgs(
+  ctx: MutationCtx,
+  work: Doc<"work">,
+  args: Record<string, unknown>,
+) {
+  let context = work.onComplete?.context;
+  if (context === undefined && work.payloadId) {
+    context = (await ctx.db.get("payload", work.payloadId))?.context;
+  }
+  const layout = layoutPayload(work.fnName, args, context);
+  if (work.payloadId) {
+    await ctx.db.delete("payload", work.payloadId);
+  }
+  let onComplete = work.onComplete;
+  if (onComplete) {
+    const { context: _, ...rest } = onComplete;
+    onComplete =
+      layout.context === undefined
+        ? rest
+        : { ...rest, context: layout.context };
+  }
+  await ctx.db.patch("work", work._id, {
+    fnArgs: layout.fnArgs,
+    onComplete,
+    payloadId: layout.payload
+      ? await ctx.db.insert("payload", layout.payload)
+      : undefined,
+    payloadSize: layout.payload ? layout.payloadSize : undefined,
+    // Each step gets the full retry budget.
+    skippedAttempts: work.attempts,
+  });
 }
 
 function stripResult(result: RunResult): RunResult {
