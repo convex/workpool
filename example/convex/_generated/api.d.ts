@@ -12,6 +12,7 @@ import type * as crons from "../crons.js";
 import type * as errorData from "../errorData.js";
 import type * as example from "../example.js";
 import type * as staticHosting from "../staticHosting.js";
+import type * as test_continue from "../test/continue.js";
 import type * as test_dashboard from "../test/dashboard.js";
 import type * as test_noisy from "../test/noisy.js";
 import type * as test_nonRetryable from "../test/nonRetryable.js";
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   errorData: typeof errorData;
   example: typeof example;
   staticHosting: typeof staticHosting;
+  "test/continue": typeof test_continue;
   "test/dashboard": typeof test_dashboard;
   "test/noisy": typeof test_noisy;
   "test/nonRetryable": typeof test_nonRetryable;

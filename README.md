@@ -404,6 +404,38 @@ again and its result is `canceled`. Rescheduled attempts don't count toward
 `maxAttempts` or the retry backoff. As with any thrown error, a mutation that
 throws `RescheduleError` rolls back its writes.
 
+#### Continuing with new arguments
+
+For work that proceeds in steps, such as paging through a table, return
+`continueWith(nextArgs)` from the job. Workpool runs the same function again
+with `nextArgs`, and only calls `onComplete` once the job returns something
+else. Unlike throwing, returning commits a mutation's writes, so each step keeps
+its progress.
+
+```ts
+import { continueWith } from "@convex-dev/workpool";
+
+export const countPosts = internalMutation({
+  args: { cursor: v.union(v.string(), v.null()), total: v.number() },
+  handler: async (ctx, { cursor, total }) => {
+    const page = await ctx.db
+      .query("posts")
+      .paginate({ cursor, numItems: 100 });
+    total += page.page.length;
+    if (!page.isDone) {
+      return continueWith({ cursor: page.continueCursor, total });
+    }
+    return total; // onComplete receives this
+  },
+});
+```
+
+Pass `{ delayMs }` as the second argument to wait before the next step. Each
+step gets the job's full retry behavior, so failures in earlier steps don't
+count against later ones. If the job is canceled, the next step doesn't run. If
+your function declares a `returns` validator, include `vContinuation` in it,
+e.g. `returns: v.union(v.number(), vContinuation)`.
+
 ## Optimizations with and without Workpool
 
 The benefit of Workpool is that it won't fall over if there are many jobs

@@ -45,6 +45,12 @@ export {
   isRescheduleError,
   type RescheduleOptions,
 } from "../component/errors.js";
+import type { Continuation } from "../component/continue.js";
+export {
+  continueWith,
+  vContinuation,
+  type Continuation,
+} from "../component/continue.js";
 export { logLevel as vLogLevel, type LogLevel } from "../component/logging.js";
 export { retryBehavior as vRetryBehavior } from "../component/shared.js";
 
@@ -104,7 +110,8 @@ export class Workpool {
       "action",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
@@ -143,7 +150,8 @@ export class Workpool {
       "action",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
@@ -179,7 +187,8 @@ export class Workpool {
       "mutation",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -210,7 +219,8 @@ export class Workpool {
       "mutation",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -239,7 +249,8 @@ export class Workpool {
       "query",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -271,7 +282,8 @@ export class Workpool {
       "query",
       FunctionVisibility,
       Args,
-      NoInfer<ReturnType>
+      // A job that returns continueWith runs again rather than completing.
+      NoInfer<ReturnType> | Continuation<any>
     >,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -636,7 +648,12 @@ export async function enqueueBatch<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
+  fn: FunctionReference<
+    FnType,
+    FunctionVisibility,
+    Args,
+    NoInfer<ReturnType> | Continuation<any>
+  >,
   fnArgsArray: Array<Args>,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
@@ -699,7 +716,12 @@ export async function enqueue<
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
+  fn: FunctionReference<
+    FnType,
+    FunctionVisibility,
+    Args,
+    NoInfer<ReturnType> | Continuation<any>
+  >,
   fnArgs: Args,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;

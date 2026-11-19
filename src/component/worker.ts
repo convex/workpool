@@ -14,6 +14,7 @@ import {
   type ActionCtx,
 } from "./_generated/server.js";
 import { failedResult, getReschedule, isNonRetryableError } from "./errors.js";
+import { getContinuation } from "./continue.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import type { CompleteJob } from "./complete.js";
@@ -60,9 +61,7 @@ export const runMutationWrapper = internalMutation({
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
+        jobs: [{ workId, attempt, ...success(console, workId, returnValue) }],
       });
     } catch (e: unknown) {
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
@@ -169,12 +168,29 @@ async function runOne(
       args.fnType === "action"
         ? await ctx.runAction(args.fnHandle as FunctionHandle<"action">, fnArgs)
         : await ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs);
-    const runResult: RunResult = { kind: "success", returnValue };
-    return { runResult, runOnCompleteInline: true };
+    return {
+      ...success(console, args.workId, returnValue),
+      runOnCompleteInline: true,
+    };
   } catch (e: unknown) {
     // We let the main loop handle the retries.
     return failure(console, args.workId, e);
   }
+}
+
+/** How a job that returned should complete: continued, or succeeded. */
+function success(console: Logger, workId: Id<"work">, returnValue: unknown) {
+  const continuation = getContinuation(returnValue);
+  if (continuation) {
+    console.info(
+      `[worker] ${workId} continues with new args in ${continuation.delayMs}ms`,
+    );
+    // The args are stored on the work, so don't also pass them as a result.
+    const runResult: RunResult = { kind: "success", returnValue: null };
+    return { runResult, continueWith: continuation };
+  }
+  const runResult: RunResult = { kind: "success", returnValue };
+  return { runResult };
 }
 
 /** How a job that threw should complete: rescheduled, or failed. */
