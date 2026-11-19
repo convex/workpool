@@ -5,6 +5,7 @@ import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
+import { getConfig } from "./config.js";
 import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
@@ -27,8 +28,8 @@ export async function completeHandler(
   ctx: MutationCtx,
   args: Infer<typeof completeArgs>,
 ) {
-  const globals = await ctx.db.query("globals").unique();
-  const console = createLogger(globals?.logLevel);
+  const { logLevel } = await getConfig(ctx);
+  const console = createLogger(logLevel);
   if (args.jobs.length === 0) {
     console.warn("Trying to complete 0 jobs");
     return;

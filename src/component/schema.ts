@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import {
   fnType,
   vConfig,
+  vInitConfig,
   vOnCompleteFnContext,
   retryBehavior,
   vResult,
@@ -17,8 +18,12 @@ const segment = v.commitTs();
 const timestamp = v.int64();
 
 export default defineSchema({
-  // Written from kickLoop, read everywhere.
-  globals: defineTable(vConfig),
+  // Singleton. `init` is written by the component's init on each push; the
+  // top-level fields are the legacy per-call config from the client class.
+  globals: defineTable({
+    ...vConfig.fields,
+    init: v.optional(vInitConfig),
+  }),
   // Singleton, only read & written by `run`.
   internalState: defineTable({
     /** @deprecated batch-worker now owns the generation guard. */

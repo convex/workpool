@@ -17,16 +17,21 @@ import {
 } from "./logging.js";
 import {
   boundScheduledTime,
-  vConfig,
   fnType,
   vOnCompleteFnContext,
   retryBehavior,
   status as statusValidator,
   MINUTE,
   toTimestamp,
+  vRetryOverride,
+  vRuntimeConfig,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
-import { getOrUpdateGlobals } from "./config.js";
+import {
+  type EffectiveConfig,
+  getOrUpdateGlobals,
+  resolveRetryBehavior,
+} from "./config.js";
 import { findPendingStart } from "./pendingStart.js";
 
 const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
@@ -41,11 +46,14 @@ const itemArgs = {
   runAt: v.number(),
   // TODO: annotation?
   onComplete: v.optional(vOnCompleteFnContext),
+  // Already resolved by clients from before init args. Wins over `retry`.
   retryBehavior: v.optional(retryBehavior),
+  // The call's override, resolved against the configured defaults here.
+  retry: v.optional(vRetryOverride),
 };
 const enqueueArgs = {
   ...itemArgs,
-  config: vConfig.partial(),
+  config: vRuntimeConfig,
 };
 export const enqueue = mutation({
   args: enqueueArgs,
@@ -54,16 +62,25 @@ export const enqueue = mutation({
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    return await enqueueHandler(ctx, console, itemArgs);
+    return await enqueueHandler(ctx, console, globals, itemArgs);
   },
 });
 /** Exported for tests, so they enqueue exactly what the public API writes. */
 export async function enqueueHandler(
   ctx: MutationCtx,
   console: Logger,
-  { runAt, ...workArgs }: ObjectType<typeof itemArgs>,
+  config: EffectiveConfig,
+  { runAt, retry, ...workArgs }: ObjectType<typeof itemArgs>,
 ) {
   runAt = boundScheduledTime(runAt, console);
+  if (workArgs.fnType === "action" && workArgs.retryBehavior === undefined) {
+    workArgs.retryBehavior = resolveRetryBehavior(config, retry);
+  }
+  // Resolved at enqueue, like retryBehavior: work enqueued before a push that
+  // changes the init's onComplete keeps the handle it was enqueued with.
+  if (workArgs.onComplete === undefined && config.onComplete !== undefined) {
+    workArgs.onComplete = { fnHandle: config.onComplete };
+  }
 
   const fnArgsSize = getConvexSize(workArgs.fnArgs);
   if (fnArgsSize > MAX_DOC_SIZE) {
@@ -139,14 +156,16 @@ export async function enqueueHandler(
 export const enqueueBatch = mutation({
   args: {
     items: v.array(v.object(itemArgs)),
-    config: vConfig.partial(),
+    config: vRuntimeConfig,
   },
   returns: v.array(v.id("work")),
   handler: async (ctx, { config, items }) => {
     const globals = await getOrUpdateGlobals(ctx, config);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
-    return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
+    return Promise.all(
+      items.map((item) => enqueueHandler(ctx, console, globals, item)),
+    );
   },
 });
 

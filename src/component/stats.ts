@@ -5,15 +5,11 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server.js";
-import {
-  type Config,
-  DEFAULT_MAX_PARALLELISM,
-  WORKER_NAME,
-  toTimestamp,
-} from "./shared.js";
+import { type Config, toTimestamp, WORKER_NAME } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
 import { components, internal } from "./_generated/api.js";
 import schema from "./schema.js";
+import { getConfig } from "./config.js";
 
 /**
  * Record stats about work execution. Intended to be queried by Axiom or Datadog.
@@ -186,13 +182,12 @@ export const diagnostics = internalQuery({
   args: {},
   returns: v.any(),
   handler: async (ctx) => {
-    const global = await ctx.db.query("globals").unique();
+    const { maxParallelism } = await getConfig(ctx);
     const internalState = await ctx.db
       .query("internalState")
       .order("desc")
       .first();
     const inProgressWork = internalState?.running.length ?? 0;
-    const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
       ctx.db.query("pendingCompletion") as any

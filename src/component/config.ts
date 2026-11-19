@@ -1,10 +1,56 @@
-import { mutation, type MutationCtx } from "./_generated/server.js";
-import { vConfig, DEFAULT_MAX_PARALLELISM, type Config } from "./shared.js";
+import type { FunctionHandle } from "convex/server";
+import type { Doc } from "./_generated/dataModel.js";
+import {
+  mutation,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
+import {
+  vConfig,
+  DEFAULT_MAX_PARALLELISM,
+  DEFAULT_RETRY_BEHAVIOR,
+  type Config,
+  type InitConfig,
+  type RetryBehavior,
+  type RuntimeConfig,
+} from "./shared.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
 
 export const MAX_POSSIBLE_PARALLELISM = 200;
 export const MAX_PARALLELISM_SOFT_LIMIT = 100;
+
+export type EffectiveConfig = Config & {
+  defaultRetryBehavior?: RetryBehavior;
+  retryActionsByDefault?: boolean;
+  onComplete?: FunctionHandle<"mutation">;
+};
+
+/**
+ * Init args win over the legacy per-call config, which wins over defaults.
+ * An install whose parent passes no args (or that predates init) behaves as
+ * before.
+ */
+export function effectiveConfig(
+  globals: Doc<"globals"> | null,
+  runtime?: RuntimeConfig,
+): EffectiveConfig {
+  const init: InitConfig = globals?.init ?? {};
+  return {
+    maxParallelism:
+      init.maxParallelism ?? globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
+    logLevel: init.logLevel ?? globals?.logLevel ?? DEFAULT_LOG_LEVEL,
+    defaultRetryBehavior:
+      init.defaultRetryBehavior ?? runtime?.defaultRetryBehavior,
+    retryActionsByDefault:
+      init.retryActionsByDefault ?? runtime?.retryActionsByDefault,
+    onComplete: init.onComplete as FunctionHandle<"mutation"> | undefined,
+  };
+}
+
+export async function getConfig(ctx: QueryCtx) {
+  return effectiveConfig(await ctx.db.query("globals").unique());
+}
 
 export const update = mutation({
   args: vConfig.partial(),
@@ -29,19 +75,26 @@ export function validateConfig(config: Partial<Config>) {
     }
   }
 }
+
 export async function getOrUpdateGlobals(
   ctx: MutationCtx,
-  config?: Partial<Config>,
-) {
+  config?: RuntimeConfig,
+): Promise<EffectiveConfig> {
   const { globals } = await _getOrUpdateGlobals(ctx, config);
-  return globals;
+  return effectiveConfig(globals, config);
 }
-async function _getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
+
+/**
+ * Legacy lazy update from per-call client options. Fields the init sets are
+ * left alone, so a stale client option can't fight the deploy-time config.
+ */
+async function _getOrUpdateGlobals(ctx: MutationCtx, config?: RuntimeConfig) {
   if (config) {
     validateConfig(config);
   }
   const globals = await ctx.db.query("globals").unique();
-  const previousValue = globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
+  const previousValue = effectiveConfig(globals).maxParallelism;
+  const init = globals?.init ?? {};
   if (!globals) {
     const id = await ctx.db.insert("globals", {
       maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
@@ -51,13 +104,18 @@ async function _getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
   } else if (config) {
     let updated = false;
     if (
+      init.maxParallelism === undefined &&
       config.maxParallelism !== undefined &&
       config.maxParallelism !== globals.maxParallelism
     ) {
       globals.maxParallelism = config.maxParallelism;
       updated = true;
     }
-    if (config.logLevel && config.logLevel !== globals.logLevel) {
+    if (
+      init.logLevel === undefined &&
+      config.logLevel &&
+      config.logLevel !== globals.logLevel
+    ) {
       globals.logLevel = config.logLevel;
       updated = true;
     }
@@ -66,4 +124,14 @@ async function _getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
     }
   }
   return { globals, previousValue };
+}
+
+export function resolveRetryBehavior(
+  config: EffectiveConfig,
+  retry: boolean | RetryBehavior | undefined,
+): RetryBehavior | undefined {
+  const defaultRetry = config.defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
+  if (retry === true) return defaultRetry;
+  if (retry === false) return undefined;
+  return retry ?? (config.retryActionsByDefault ? defaultRetry : undefined);
 }
