@@ -23,6 +23,7 @@ describe.skipIf(!supportsInit)("init args from convex.config.ts", () => {
 
   test("each pool's init runs with the args its use() passes", async () => {
     const t = initConvexTest();
+    workpool.register(t, "smallPool");
     workpool.register(t, "bigPool");
     workpool.register(t, "serializedPool");
     await t.mutation(api.example.enqueueOneMutation, { data: 1 });

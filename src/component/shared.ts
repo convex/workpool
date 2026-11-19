@@ -1,4 +1,4 @@
-import type { Infer, Validator, Value, VAny } from "convex/values";
+import type { Infer, Validator, Value, VAny, VString } from "convex/values";
 
 import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
@@ -113,6 +113,10 @@ export const vRetryOverride = v.union(v.boolean(), retryBehavior);
  * `app.use(workpool, { args })`. Also stored verbatim on the globals document,
  * so this is shared between the init's `args` and the schema.
  */
+// Matches the client's `WorkId` brand, so an app handler typed with `vWorkId`
+// is assignable to the init's `onComplete`.
+const vBrandedWorkId = v.string() as VString<string & { __isWorkId: true }>;
+
 export const initArgs = {
   maxParallelism: v.optional(v.number()),
   logLevel: v.optional(logLevel),
@@ -123,8 +127,8 @@ export const initArgs = {
     v.function({
       fnType: "mutation",
       args: {
-        workId: v.string(),
-        context: v.optional(v.any()),
+        workId: vBrandedWorkId,
+        context: v.any(),
         result: v.any(),
       },
       returns: v.null(),
