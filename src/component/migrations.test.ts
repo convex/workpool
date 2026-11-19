@@ -70,7 +70,7 @@ describe("backfillPendingStartIds", () => {
     expect(await pointerOf(later.workId)).toBeNull();
   });
 
-  it("keeps existing pointers and deletes entries whose work is gone", async () => {
+  it("keeps packed entries and existing pointers and deletes orphaned legacy entries", async () => {
     const [recorded, orphan] = await insertLegacy(2);
     // Visited first, but the work already points at its own entry.
     await t.run(async (ctx) => {
@@ -84,8 +84,20 @@ describe("backfillPendingStartIds", () => {
       await ctx.db.delete("work", orphan.workId);
     });
 
+    const packedId = await t.run((ctx) =>
+      ctx.db.insert("pendingStart", {
+        workIds: [recorded.workId],
+        segment: ctx.db.vars.commitTs,
+      }),
+    );
+
     await migrate();
 
+    expect(
+      await t.run((ctx) => ctx.db.get("pendingStart", packedId)),
+    ).toMatchObject({
+      workIds: [recorded.workId],
+    });
     expect(await pointerOf(recorded.workId)).toBe(recorded.pendingId);
     expect(
       await t.run((ctx) => ctx.db.get("pendingStart", orphan.pendingId)),
