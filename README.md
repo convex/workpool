@@ -375,6 +375,35 @@ export const sendEmail = action({
 });
 ```
 
+#### Running a job again later
+
+To run a job again later with the same arguments, without using up a retry
+attempt, throw a `RescheduleError`. This works for actions, mutations, and
+queries, and whether or not retries are enabled. For example, when a third party
+rate limits you, or what the job needs isn't ready yet:
+
+```ts
+import { RescheduleError } from "@convex-dev/workpool";
+
+export const syncAccount = internalAction({
+  args: { accountId: v.string() },
+  handler: async (ctx, { accountId }) => {
+    const response = await fetch(`https://api.example.com/sync/${accountId}`);
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers.get("Retry-After") ?? 60);
+      throw new RescheduleError({ delayMs: retryAfter * 1000 });
+    }
+    // ...
+  },
+});
+```
+
+The job stays pending while it waits, and `onComplete` isn't called until a
+later attempt finishes. If the job is canceled in the meantime, it doesn't run
+again and its result is `canceled`. Rescheduled attempts don't count toward
+`maxAttempts` or the retry backoff. As with any thrown error, a mutation that
+throws `RescheduleError` rolls back its writes.
+
 ## Optimizations with and without Workpool
 
 The benefit of Workpool is that it won't fall over if there are many jobs
@@ -492,7 +521,7 @@ Note: to get this data, set the workpool `logLevel` to `"INFO"` (or `"DEBUG"`).
 | extend parsed_message = iff( 	isnotnull(parse_json(trim("'", tostring(["data.message"])))),
   parse_json(trim("'", tostring(["data.message"]))),
   parse_json('{}') )
-| where parsed_message["component"] == "workpool" and (parsed_message["event"] == "completed") and parsed_message["status"] != "canceled"
+| where parsed_message["component"] == "workpool" and (parsed_message["event"] == "completed") and parsed_message["status"] !in ("canceled", "rescheduled")
 | summarize failure_ratio = avg(iff(parsed_message["status"] != "success", 1, 0))
   by bin(_time, 5m), function = tostring(parsed_message["fnName"])
 ```

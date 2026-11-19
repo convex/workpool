@@ -40,6 +40,7 @@ export default defineSchema({
       succeeded: v.number(), // finished successfully, regardless of retries
       failed: v.number(), // failed after all retries
       retries: v.number(), // failure that turned into a retry
+      rescheduled: v.optional(v.number()), // RescheduleError, not a failure
       canceled: v.number(), // cancelations processed
       conflicted: v.optional(v.number()),
       lastReportTs: v.number(),
@@ -63,6 +64,9 @@ export default defineSchema({
     payloadId: v.optional(v.id("payload")),
     payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
+    // Attempts that don't count toward retryBehavior.maxAttempts, such as
+    // ones that threw RescheduleError.
+    skippedAttempts: v.optional(v.number()),
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
     canceled: v.optional(v.boolean()),
@@ -87,6 +91,8 @@ export default defineSchema({
     runResult: vResult,
     workId: v.id("work"),
     retry: v.boolean(),
+    // Set when the job asked to run again after this delay. Implies retry.
+    rescheduleDelayMs: v.optional(v.number()),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

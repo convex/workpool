@@ -94,3 +94,75 @@ function isNonRetryableErrorData(data: unknown): data is NonRetryableErrorData {
   }
   return false;
 }
+
+const RESCHEDULE_MARKER = "__convexWorkpoolReschedule";
+
+type RescheduleErrorData = {
+  readonly [RESCHEDULE_MARKER]: true;
+  message: string;
+  delayMs: number;
+};
+
+export type RescheduleOptions = {
+  /**
+   * How long to wait before running the job again, in milliseconds.
+   * Defaults to 0: run again as soon as there is capacity.
+   */
+  delayMs?: number;
+  /** Shown in logs. */
+  message?: string;
+};
+
+/**
+ * Throw this from a workpool job to run it again later with the same
+ * arguments, without using up one of its retry attempts.
+ *
+ * The job stays pending in the meantime, so `onComplete` isn't called until
+ * a later attempt finishes. If the job is canceled before it runs again, it
+ * won't run again and `onComplete` is called with `kind: "canceled"`.
+ *
+ * In a mutation, throwing rolls back that mutation's writes, as with any
+ * other error.
+ */
+export class RescheduleError extends ConvexError<RescheduleErrorData> {
+  constructor(options?: RescheduleOptions) {
+    const delayMs = options?.delayMs ?? 0;
+    if (!Number.isFinite(delayMs) || delayMs < 0) {
+      throw new Error(
+        `RescheduleError delayMs must be a non-negative number, got ${delayMs}`,
+      );
+    }
+    super({
+      [RESCHEDULE_MARKER]: true,
+      message: options?.message ?? "Rescheduled",
+      delayMs,
+    });
+    this.name = new.target.name;
+  }
+}
+
+/**
+ * If `error` is a {@link RescheduleError}, including one whose data was
+ * passed through `ctx.runAction` or `ctx.runMutation`, returns its delay.
+ */
+export function getReschedule(error: unknown): { delayMs: number } | undefined {
+  const data = error instanceof ConvexError ? error.data : undefined;
+  if (
+    typeof data === "object" &&
+    data !== null &&
+    (data as Partial<RescheduleErrorData>)[RESCHEDULE_MARKER] === true
+  ) {
+    const delayMs = (data as Partial<RescheduleErrorData>).delayMs;
+    return {
+      delayMs:
+        typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0
+          ? delayMs
+          : 0,
+    };
+  }
+  return undefined;
+}
+
+export function isRescheduleError(error: unknown): boolean {
+  return getReschedule(error) !== undefined;
+}
