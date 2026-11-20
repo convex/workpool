@@ -8,6 +8,7 @@ import { createLogger } from "./logging.js";
 import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
+import { completionTransactionLimits } from "./limits.js";
 
 export type CompleteJob = Infer<typeof completeArgs.fields.jobs.element>;
 
@@ -26,7 +27,11 @@ const completeArgs = v.object({
 export async function completeHandler(
   ctx: MutationCtx,
   args: Infer<typeof completeArgs>,
+  { transactionalSuccess = false }: { transactionalSuccess?: boolean } = {},
 ) {
+  if (transactionalSuccess) {
+    assert(args.jobs.length === 1 && args.jobs[0].runResult.kind === "success");
+  }
   const globals = await ctx.db.query("globals").unique();
   const console = createLogger(globals?.logLevel);
   if (args.jobs.length === 0) {
@@ -145,7 +150,11 @@ export async function completeHandler(
               context,
               result: job.runResult,
             };
-            if (job.runOnCompleteInline) {
+            if (transactionalSuccess) {
+              await ctx.runMutation(handle, onCompleteArgs, {
+                transactionLimits: await completionTransactionLimits(ctx),
+              });
+            } else if (job.runOnCompleteInline) {
               try {
                 await ctx.runMutation(handle, onCompleteArgs);
               } catch (e) {
@@ -169,6 +178,7 @@ export async function completeHandler(
               );
             }
           } catch (e) {
+            if (transactionalSuccess) throw e;
             console.error(
               `[complete] error running onComplete for ${job.workId}`,
               e,
@@ -178,12 +188,13 @@ export async function completeHandler(
         }
         recordCompleted(console, work, job.runResult.kind, scheduledId);
 
-        // Clean up any large data that was stored separately. Deleting a
-        // nonexistent doc throws; this cleanup must not fail the completion.
+        // Clean up separately stored data. Ordinary completion tolerates a
+        // missing payload; transactional success must roll back on errors.
         if (work.payloadId) {
           try {
             await ctx.db.delete("payload", work.payloadId);
           } catch (e) {
+            if (transactionalSuccess) throw e;
             console.warn(
               `[complete] couldn't delete payload for ${job.workId}: ${e}`,
             );
