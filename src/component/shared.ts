@@ -1,4 +1,4 @@
-import type { Infer, Validator, Value, VAny, VString } from "convex/values";
+import type { Infer, Validator, Value, VAny } from "convex/values";
 
 import { v } from "convex/values";
 import { type Logger, logLevel } from "./logging.js";
@@ -106,46 +106,17 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
 // This ensures that the type satisfies the schema.
 void ({} as RetryBehavior satisfies Infer<typeof retryBehavior>);
 
-export const vRetryOverride = v.union(v.boolean(), retryBehavior);
-
 /**
  * Per-installation config passed by the parent in
  * `app.use(workpool, { args })`. Also stored verbatim on the globals document,
  * so this is shared between the init's `args` and the schema.
  */
-// Matches the client's `WorkId` brand, so an app handler typed with `vWorkId`
-// is assignable to the init's `onComplete`.
-const vBrandedWorkId = v.string() as VString<string & { __isWorkId: true }>;
-
 export const initArgs = {
   maxParallelism: v.optional(v.number()),
   logLevel: v.optional(logLevel),
-  defaultRetryBehavior: v.optional(retryBehavior),
-  retryActionsByDefault: v.optional(v.boolean()),
-  /** Called for every work item enqueued without its own `onComplete`. */
-  onComplete: v.optional(
-    v.function({
-      fnType: "mutation",
-      args: {
-        workId: vBrandedWorkId,
-        context: v.any(),
-        result: v.any(),
-      },
-      returns: v.null(),
-    }),
-  ),
 };
 export const vInitConfig = v.object(initArgs);
 export type InitConfig = Infer<typeof vInitConfig>;
-
-/** Options older clients pass on each call; init args take precedence. */
-export const vRuntimeConfig = v.object({
-  maxParallelism: v.optional(v.number()),
-  logLevel: v.optional(logLevel),
-  defaultRetryBehavior: v.optional(retryBehavior),
-  retryActionsByDefault: v.optional(v.boolean()),
-});
-export type RuntimeConfig = Infer<typeof vRuntimeConfig>;
 
 export const vResult = vRunResult(v.any());
 export function vRunResult<RV extends Validator<any, any, any> = VAny>(

@@ -23,6 +23,7 @@ import {
 import type { ComponentApi } from "../component/_generated/component.js";
 import { type LogLevel } from "../component/logging.js";
 import {
+  type Config,
   DEFAULT_RETRY_BEHAVIOR,
   type RetryBehavior,
   type RunResult,
@@ -74,13 +75,11 @@ export class Workpool {
    *
    * @param component - The component to use, like `components.workpool` from
    *   `./_generated/api.ts`.
-   * @param options - The {@link WorkpoolOptions} for the Workpool. Prefer
-   *   passing pool config as `args` to `app.use(workpool, { args })` in
-   *   convex.config.ts, which take precedence over these.
+   * @param options - The {@link WorkpoolOptions} for the Workpool.
    */
   constructor(
     public component: WorkpoolComponent,
-    public options: WorkpoolOptions = {},
+    public options: WorkpoolOptions,
   ) {}
 
   /**
@@ -104,7 +103,13 @@ export class Workpool {
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
+    const retryBehavior = getRetryBehavior(
+      this.options.defaultRetryBehavior,
+      this.options.retryActionsByDefault,
+      options?.retry,
+    );
     return enqueue(this.component, ctx, "action", fn, fnArgs, {
+      retryBehavior,
       ...this.options,
       ...options,
     });
@@ -137,7 +142,13 @@ export class Workpool {
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
+    const retryBehavior = getRetryBehavior(
+      this.options.defaultRetryBehavior,
+      this.options.retryActionsByDefault,
+      options?.retry,
+    );
     return enqueueBatch(this.component, ctx, "action", fn, argsArray, {
+      retryBehavior,
       ...this.options,
       ...options,
     });
@@ -412,7 +423,7 @@ export type RetryOption = {
 };
 
 /**
- * Legacy per-call config. Each of these can instead be passed as `args` when
+ * `maxParallelism` and `logLevel` can instead be passed as `args` when
  * installing the component (`app.use(workpool, { args: { maxParallelism } })`),
  * and the init args win when both are set.
  */
@@ -542,14 +553,29 @@ const _ = {} as OnCompleteArgs satisfies SharedOnCompleteArgs;
 // Helper functions
 //
 
+function getRetryBehavior(
+  defaultRetryBehavior: RetryBehavior | undefined,
+  retryActionsByDefault: boolean | undefined,
+  retryOverride: boolean | RetryBehavior | undefined,
+): RetryBehavior | undefined {
+  const defaultRetry = defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
+  const retryByDefault = retryActionsByDefault ?? false;
+  if (retryOverride === true) {
+    return defaultRetry;
+  }
+  if (retryOverride === false) {
+    return undefined;
+  }
+  return retryOverride ?? (retryByDefault ? defaultRetry : undefined);
+}
+
 async function enqueueArgs<Context, ReturnType>(
   fn:
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
     | (EnqueueOptions<Context, ReturnType> &
-        RetryOption &
-        WorkpoolOptions & { retryBehavior?: RetryBehavior })
+        Partial<Config> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
   const [fnHandle, fnName] =
@@ -570,12 +596,9 @@ async function enqueueArgs<Context, ReturnType>(
       : undefined,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
-    retry: opts?.retry,
     config: {
       logLevel: opts?.logLevel,
       maxParallelism: opts?.maxParallelism,
-      defaultRetryBehavior: opts?.defaultRetryBehavior,
-      retryActionsByDefault: opts?.retryActionsByDefault,
     },
   } satisfies Omit<
     FunctionArgs<ComponentApi["lib"]["enqueue"]>,
@@ -614,12 +637,11 @@ export async function enqueueBatch<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgsArray: Array<Args>,
-  options: EnqueueOptions<Context, ReturnType> &
-    RetryOption &
-    WorkpoolOptions & {
-      /** A fully resolved retry policy, which wins over `retry`. */
-      retryBehavior?: RetryBehavior;
-    },
+  options: EnqueueOptions<Context, ReturnType> & {
+    retryBehavior?: RetryBehavior;
+    maxParallelism?: number;
+    logLevel?: LogLevel;
+  },
 ): Promise<WorkId[]> {
   const { config, ...defaults } = await enqueueArgs(fn, options);
   const batches = [];
@@ -678,12 +700,11 @@ export async function enqueue<
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
   fnArgs: Args,
-  options: EnqueueOptions<Context, ReturnType> &
-    RetryOption &
-    WorkpoolOptions & {
-      /** A fully resolved retry policy, which wins over `retry`. */
-      retryBehavior?: RetryBehavior;
-    },
+  options: EnqueueOptions<Context, ReturnType> & {
+    retryBehavior?: RetryBehavior;
+    maxParallelism?: number;
+    logLevel?: LogLevel;
+  },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {
     ...(await enqueueArgs(fn, options)),

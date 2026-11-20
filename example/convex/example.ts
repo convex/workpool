@@ -16,10 +16,21 @@ import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
 import { type FunctionArgs } from "convex/server";
 
-// Pool config is passed as `args` in convex.config.ts.
-const bigPool = new Workpool(components.bigPool);
-const smallPool = new Workpool(components.smallPool);
-const serializedPool = new Workpool(components.serializedPool);
+// maxParallelism and logLevel are passed as `args` in convex.config.ts.
+const bigPool = new Workpool(components.bigPool, {
+  defaultRetryBehavior: {
+    maxAttempts: 3,
+    initialBackoffMs: 100,
+    base: 2,
+  },
+  retryActionsByDefault: true,
+});
+const smallPool = new Workpool(components.smallPool, {
+  retryActionsByDefault: true,
+});
+const serializedPool = new Workpool(components.serializedPool, {
+  retryActionsByDefault: true,
+});
 const console = createLogger("DEBUG");
 
 export const addMutation = mutation({
@@ -241,18 +252,6 @@ export const myAction = internalAction({
       default:
         throw new Error("invalid action");
     }
-  },
-});
-
-// The serialized pool's onComplete for work enqueued without its own.
-export const logFailure = internalMutation({
-  args: vOnCompleteArgs(),
-  returns: v.null(),
-  handler: async (_ctx, { workId, result }) => {
-    if (result.kind === "failed") {
-      console.error(`work ${workId} failed: ${result.error}`);
-    }
-    return null;
   },
 });
 

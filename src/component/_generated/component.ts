@@ -62,14 +62,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           config: {
-            defaultRetryBehavior?: {
-              base: number;
-              initialBackoffMs: number;
-              maxAttempts: number;
-            };
             logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism?: number;
-            retryActionsByDefault?: boolean;
           };
           fnArgs: any;
           fnHandle: string;
@@ -80,9 +74,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
             excludeKinds?: Array<"success" | "failed" | "canceled">;
             fnHandle: string;
           };
-          retry?:
-            | boolean
-            | { base: number; initialBackoffMs: number; maxAttempts: number };
           retryBehavior?: {
             base: number;
             initialBackoffMs: number;
@@ -98,14 +89,8 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           config: {
-            defaultRetryBehavior?: {
-              base: number;
-              initialBackoffMs: number;
-              maxAttempts: number;
-            };
             logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
             maxParallelism?: number;
-            retryActionsByDefault?: boolean;
           };
           items: Array<{
             fnArgs: any;
@@ -117,9 +102,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
               excludeKinds?: Array<"success" | "failed" | "canceled">;
               fnHandle: string;
             };
-            retry?:
-              | boolean
-              | { base: number; initialBackoffMs: number; maxAttempts: number };
             retryBehavior?: {
               base: number;
               initialBackoffMs: number;

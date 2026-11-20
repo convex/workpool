@@ -1,4 +1,3 @@
-import type { FunctionHandle } from "convex/server";
 import type { Doc } from "./_generated/dataModel.js";
 import {
   mutation,
@@ -8,11 +7,8 @@ import {
 import {
   vConfig,
   DEFAULT_MAX_PARALLELISM,
-  DEFAULT_RETRY_BEHAVIOR,
   type Config,
   type InitConfig,
-  type RetryBehavior,
-  type RuntimeConfig,
 } from "./shared.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
@@ -20,31 +16,17 @@ import { kickMainLoop } from "./kick.js";
 export const MAX_POSSIBLE_PARALLELISM = 200;
 export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 
-export type EffectiveConfig = Config & {
-  defaultRetryBehavior?: RetryBehavior;
-  retryActionsByDefault?: boolean;
-  onComplete?: FunctionHandle<"mutation">;
-};
-
 /**
  * Init args win over the legacy per-call config, which wins over defaults.
  * An install whose parent passes no args (or that predates init) behaves as
  * before.
  */
-export function effectiveConfig(
-  globals: Doc<"globals"> | null,
-  runtime?: RuntimeConfig,
-): EffectiveConfig {
+export function effectiveConfig(globals: Doc<"globals"> | null): Config {
   const init: InitConfig = globals?.init ?? {};
   return {
     maxParallelism:
       init.maxParallelism ?? globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
     logLevel: init.logLevel ?? globals?.logLevel ?? DEFAULT_LOG_LEVEL,
-    defaultRetryBehavior:
-      init.defaultRetryBehavior ?? runtime?.defaultRetryBehavior,
-    retryActionsByDefault:
-      init.retryActionsByDefault ?? runtime?.retryActionsByDefault,
-    onComplete: init.onComplete as FunctionHandle<"mutation"> | undefined,
   };
 }
 
@@ -78,17 +60,17 @@ export function validateConfig(config: Partial<Config>) {
 
 export async function getOrUpdateGlobals(
   ctx: MutationCtx,
-  config?: RuntimeConfig,
-): Promise<EffectiveConfig> {
+  config?: Partial<Config>,
+): Promise<Config> {
   const { globals } = await _getOrUpdateGlobals(ctx, config);
-  return effectiveConfig(globals, config);
+  return effectiveConfig(globals);
 }
 
 /**
  * Legacy lazy update from per-call client options. Fields the init sets are
  * left alone, so a stale client option can't fight the deploy-time config.
  */
-async function _getOrUpdateGlobals(ctx: MutationCtx, config?: RuntimeConfig) {
+async function _getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
   if (config) {
     validateConfig(config);
   }
@@ -124,14 +106,4 @@ async function _getOrUpdateGlobals(ctx: MutationCtx, config?: RuntimeConfig) {
     }
   }
   return { globals, previousValue };
-}
-
-export function resolveRetryBehavior(
-  config: EffectiveConfig,
-  retry: boolean | RetryBehavior | undefined,
-): RetryBehavior | undefined {
-  const defaultRetry = config.defaultRetryBehavior ?? DEFAULT_RETRY_BEHAVIOR;
-  if (retry === true) return defaultRetry;
-  if (retry === false) return undefined;
-  return retry ?? (config.retryActionsByDefault ? defaultRetry : undefined);
 }

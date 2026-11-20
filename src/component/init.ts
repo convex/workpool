@@ -23,7 +23,10 @@ export const init = internalMutation({
         logLevel: DEFAULT_LOG_LEVEL,
         init: args,
       });
-    } else if (JSON.stringify(globals.init) !== JSON.stringify(args)) {
+    } else if (
+      globals.init?.maxParallelism !== args.maxParallelism ||
+      globals.init?.logLevel !== args.logLevel
+    ) {
       await ctx.db.patch("globals", globals._id, { init: args });
     } else {
       return null;

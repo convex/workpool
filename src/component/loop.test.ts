@@ -15,7 +15,6 @@ import {
   SATURATED_STATUS_COOLDOWN,
   STATUS_COOLDOWN,
 } from "./loop.js";
-import { effectiveConfig } from "./config.js";
 import { enqueueHandler } from "./lib.js";
 import { createLogger } from "./logging.js";
 import { setupTest } from "./setup.test.js";
@@ -101,19 +100,14 @@ describe("loop", () => {
     { runAt, segment }: { runAt?: number; segment?: bigint } = {},
   ): Promise<Id<"work">> {
     return t.run(async (ctx) => {
-      const workId = await enqueueHandler(
-        ctx,
-        createLogger("WARN"),
-        effectiveConfig(null),
-        {
-          fnType: "action",
-          fnHandle: "test_handle",
-          fnName: "test_handle",
-          fnArgs: {},
-          runAt: runAt ?? Date.now(),
-          ...overrides,
-        },
-      );
+      const workId = await enqueueHandler(ctx, createLogger("WARN"), {
+        fnType: "action",
+        fnHandle: "test_handle",
+        fnName: "test_handle",
+        fnArgs: {},
+        runAt: runAt ?? Date.now(),
+        ...overrides,
+      });
       if (segment !== undefined) {
         // Pin the ordering value, e.g. to simulate a shared commit stamp.
         const work = (await ctx.db.get("work", workId))!;
@@ -1376,18 +1370,13 @@ describe("loop", () => {
       // external fake clock to preserve Date.now() >= snapshotTs.
       const { runAt, workId } = await t.run(async (ctx) => {
         const runAt = Date.now() + 0.5;
-        const workId = await enqueueHandler(
-          ctx,
-          createLogger("WARN"),
-          effectiveConfig(null),
-          {
-            fnType: "action",
-            fnHandle: "test_handle",
-            fnName: "test_handle",
-            fnArgs: {},
-            runAt,
-          },
-        );
+        const workId = await enqueueHandler(ctx, createLogger("WARN"), {
+          fnType: "action",
+          fnHandle: "test_handle",
+          fnName: "test_handle",
+          fnArgs: {},
+          runAt,
+        });
         return { runAt, workId };
       });
       const entry = (await observe()).pendingStart.find(
