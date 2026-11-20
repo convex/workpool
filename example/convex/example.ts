@@ -16,25 +16,20 @@ import { v } from "convex/values";
 import { createLogger } from "../../src/component/logging";
 import { type FunctionArgs } from "convex/server";
 
+// maxParallelism and logLevel are passed as `args` in convex.config.ts.
 const bigPool = new Workpool(components.bigPool, {
-  maxParallelism: 20,
   defaultRetryBehavior: {
     maxAttempts: 3,
     initialBackoffMs: 100,
     base: 2,
   },
   retryActionsByDefault: true,
-  logLevel: "INFO",
 });
 const smallPool = new Workpool(components.smallPool, {
-  maxParallelism: 3,
   retryActionsByDefault: true,
-  logLevel: "INFO",
 });
 const serializedPool = new Workpool(components.serializedPool, {
-  maxParallelism: 1,
   retryActionsByDefault: true,
-  logLevel: "INFO",
 });
 const console = createLogger("DEBUG");
 

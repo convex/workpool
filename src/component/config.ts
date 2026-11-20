@@ -1,20 +1,35 @@
-import { mutation, type MutationCtx } from "./_generated/server.js";
-import { vConfig, DEFAULT_MAX_PARALLELISM, type Config } from "./shared.js";
+import type { Doc } from "./_generated/dataModel.js";
+import { mutation, type QueryCtx } from "./_generated/server.js";
+import { DEFAULT_MAX_PARALLELISM, vConfig, type Config } from "./shared.js";
 import { createLogger, DEFAULT_LOG_LEVEL } from "./logging.js";
 import { kickMainLoop } from "./kick.js";
 
 export const MAX_POSSIBLE_PARALLELISM = 200;
 export const MAX_PARALLELISM_SOFT_LIMIT = 100;
 
-export const update = mutation({
-  args: vConfig.partial(),
-  handler: async (ctx, args) => {
-    const { previousValue } = await _getOrUpdateGlobals(ctx, args);
-    if (args.maxParallelism && args.maxParallelism > previousValue) {
-      await kickMainLoop(ctx, "kick");
-    }
-  },
-});
+/**
+ * The globals document holds the init args, plus the runtime overrides from
+ * `update`, which win over them. Defaults apply here.
+ */
+export function effectiveConfig(
+  globals: Pick<
+    Doc<"globals">,
+    "maxParallelism" | "logLevel" | "overrides"
+  > | null,
+): Config {
+  return {
+    maxParallelism:
+      globals?.overrides?.maxParallelism ??
+      globals?.maxParallelism ??
+      DEFAULT_MAX_PARALLELISM,
+    logLevel:
+      globals?.overrides?.logLevel ?? globals?.logLevel ?? DEFAULT_LOG_LEVEL,
+  };
+}
+
+export async function getConfig(ctx: QueryCtx) {
+  return effectiveConfig(await ctx.db.query("globals").unique());
+}
 
 export function validateConfig(config: Partial<Config>) {
   if (config.maxParallelism !== undefined) {
@@ -29,41 +44,32 @@ export function validateConfig(config: Partial<Config>) {
     }
   }
 }
-export async function getOrUpdateGlobals(
-  ctx: MutationCtx,
-  config?: Partial<Config>,
-) {
-  const { globals } = await _getOrUpdateGlobals(ctx, config);
-  return globals;
-}
-async function _getOrUpdateGlobals(ctx: MutationCtx, config?: Partial<Config>) {
-  if (config) {
-    validateConfig(config);
-  }
-  const globals = await ctx.db.query("globals").unique();
-  const previousValue = globals?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
-  if (!globals) {
-    const id = await ctx.db.insert("globals", {
-      maxParallelism: config?.maxParallelism ?? DEFAULT_MAX_PARALLELISM,
-      logLevel: config?.logLevel ?? DEFAULT_LOG_LEVEL,
-    });
-    return { globals: (await ctx.db.get("globals", id))!, previousValue };
-  } else if (config) {
-    let updated = false;
-    if (
-      config.maxParallelism !== undefined &&
-      config.maxParallelism !== globals.maxParallelism
-    ) {
-      globals.maxParallelism = config.maxParallelism;
-      updated = true;
+
+/**
+ * Runtime override on top of the init args, e.g. to scale or pause
+ * (`maxParallelism: 0`) a pool without a push. Overrides persist across pushes
+ * until changed here.
+ */
+export const update = mutation({
+  args: vConfig.partial(),
+  handler: async (ctx, args) => {
+    validateConfig(args);
+    const globals = await ctx.db.query("globals").unique();
+    const before = effectiveConfig(globals).maxParallelism;
+    const overrides = { ...globals?.overrides };
+    if (args.maxParallelism !== undefined) {
+      overrides.maxParallelism = args.maxParallelism;
     }
-    if (config.logLevel && config.logLevel !== globals.logLevel) {
-      globals.logLevel = config.logLevel;
-      updated = true;
+    if (args.logLevel !== undefined) {
+      overrides.logLevel = args.logLevel;
     }
-    if (updated) {
-      await ctx.db.replace("globals", globals._id, globals);
+    if (!globals) {
+      await ctx.db.insert("globals", { overrides });
+    } else {
+      await ctx.db.patch("globals", globals._id, { overrides });
     }
-  }
-  return { globals, previousValue };
-}
+    if (effectiveConfig({ ...globals, overrides }).maxParallelism > before) {
+      await kickMainLoop(ctx, "kick");
+    }
+  },
+});

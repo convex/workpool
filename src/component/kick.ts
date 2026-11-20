@@ -25,6 +25,13 @@ export async function kickMainLoop(
   });
 }
 
+export const kick = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await kickMainLoop(ctx, "kick");
+  },
+});
+
 /**
  * Hard reset: stop the worker, then start it again (reusing the stored
  * query/mutation/config). A manual escape hatch if the loop ever wedges.

@@ -6,7 +6,7 @@ import {
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { assert } from "convex-helpers";
-import { getComponent } from "./pool";
+import { configurePool } from "./pool";
 
 export async function runStatus(
   ctx: QueryCtx,
@@ -56,9 +56,11 @@ export const start = internalMutation({
       }
     }
     if (args.parameters.maxParallelism !== undefined) {
-      await ctx.runMutation(getComponent(args.pool ?? "new").config.update, {
-        maxParallelism: args.parameters.maxParallelism,
-      });
+      await configurePool(
+        ctx,
+        args.pool ?? "new",
+        args.parameters.maxParallelism,
+      );
     }
 
     // Create new run

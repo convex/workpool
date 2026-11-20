@@ -39,21 +39,14 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       cancel: FunctionReference<
         "mutation",
         "internal",
-        {
-          id: string;
-          logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-        },
+        { id: string },
         any,
         Name
       >;
       cancelAll: FunctionReference<
         "mutation",
         "internal",
-        {
-          before?: number;
-          limit?: number;
-          logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-        },
+        { before?: number; limit?: number },
         any,
         Name
       >;
@@ -61,10 +54,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
-          config: {
-            logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-            maxParallelism?: number;
-          };
           fnArgs: any;
           fnHandle: string;
           fnName: string;
@@ -88,10 +77,6 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "mutation",
         "internal",
         {
-          config: {
-            logLevel?: "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR";
-            maxParallelism?: number;
-          };
           items: Array<{
             fnArgs: any;
             fnHandle: string;

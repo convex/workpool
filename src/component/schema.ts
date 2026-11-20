@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   fnType,
-  vConfig,
+  vInitConfig,
   vOnCompleteFnContext,
   retryBehavior,
   vResult,
@@ -17,8 +17,12 @@ const segment = v.commitTs();
 const timestamp = v.int64();
 
 export default defineSchema({
-  // Written from kickLoop, read everywhere.
-  globals: defineTable(vConfig),
+  // Singleton holding the init args, written by the component's init on push,
+  // and the runtime overrides written by `config.update`.
+  globals: defineTable({
+    ...vInitConfig.fields,
+    overrides: v.optional(vInitConfig),
+  }),
   // Singleton, only read & written by `run`.
   internalState: defineTable({
     /** @deprecated batch-worker now owns the generation guard. */

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { components, internal } from "./_generated/api.js";
 import { initConvexTest } from "./setup.test.js";
 
-const pool = new Workpool(components.bigPool, { logLevel: "ERROR" });
+const pool = new Workpool(components.bigPool);
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 

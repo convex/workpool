@@ -108,10 +108,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Simulate a successful job completion
@@ -156,10 +152,6 @@ describe("complete", () => {
         fnArgs: { filler: "x".repeat(10_000) },
         fnType: "action",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
       await t.run(async (ctx) => {
         const work = await ctx.db.get("work", workId);
@@ -200,10 +192,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         retryBehavior: {
           maxAttempts: 3,
           initialBackoffMs: 100,
@@ -251,10 +239,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         retryBehavior: {
           maxAttempts: 3,
           initialBackoffMs: 100,
@@ -299,10 +283,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         retryBehavior: {
           maxAttempts: 2, // Only 1 retry allowed
           initialBackoffMs: 100,
@@ -357,10 +337,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Simulate a canceled job completion
@@ -462,10 +438,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         onComplete: {
           fnHandle: "testOnComplete",
           context: { someContext: "value" },
@@ -515,10 +487,6 @@ describe("complete", () => {
         fnArgs: { test: 1 },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       const workId2 = await t.mutation(api.lib.enqueue, {
@@ -527,10 +495,6 @@ describe("complete", () => {
         fnArgs: { test: 2 },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         retryBehavior: {
           maxAttempts: 3,
           initialBackoffMs: 100,
@@ -583,10 +547,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Update the work to have a different attempt number
@@ -635,10 +595,6 @@ describe("complete", () => {
         fnArgs: { test: "data" },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
         retryBehavior: {
           maxAttempts: 3,
           initialBackoffMs: 100,

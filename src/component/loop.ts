@@ -6,6 +6,7 @@ import {
 } from "@convex-dev/batch-worker";
 import { internal } from "./_generated/api.js";
 import { kickMainLoop } from "./kick.js";
+import { getConfig } from "./config.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import {
   internalMutation,
@@ -14,15 +15,9 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import type { CompleteJob } from "./complete.js";
-import {
-  createLogger,
-  DEFAULT_LOG_LEVEL,
-  type Logger,
-  type LogLevel,
-} from "./logging.js";
+import { createLogger, type Logger, type LogLevel } from "./logging.js";
 import {
   type Config,
-  DEFAULT_MAX_PARALLELISM,
   fromTimestamp,
   fromSegment,
   maxBigint,
@@ -116,7 +111,7 @@ export const getBatch = internalQuery({
   returns: batchValidators.vQueryReturns,
   handler: async (ctx): Promise<BatchResult<Batch>> => {
     const snapshotTs = ctx.meta.getSnapshotTs();
-    const globals = await getGlobals(ctx);
+    const globals = await getConfig(ctx);
     const state = await ctx.db.query("internalState").order("desc").first();
     if (state?.segmentCursors.sweep === undefined) {
       const docs = await ctx.db
@@ -254,7 +249,7 @@ export const run = internalMutation({
       });
       return null;
     }
-    const globals = await getGlobals(ctx);
+    const globals = await getConfig(ctx);
     const console = createLogger(globals.logLevel);
     const nowTs = toTimestamp(Date.now());
 
@@ -825,21 +820,10 @@ export function withJitter(delay: number) {
   return delay * (0.5 + Math.random());
 }
 
-async function getGlobals(ctx: QueryCtx) {
-  const globals = await ctx.db.query("globals").unique();
-  if (!globals) {
-    return {
-      maxParallelism: DEFAULT_MAX_PARALLELISM,
-      logLevel: DEFAULT_LOG_LEVEL,
-    };
-  }
-  return globals;
-}
-
 async function getOrCreateState(ctx: MutationCtx) {
   const state = await ctx.db.query("internalState").order("desc").first();
   if (state) return state;
-  const globals = await getGlobals(ctx);
+  const globals = await getConfig(ctx);
   const console = createLogger(globals.logLevel);
   console.debug("Creating initial internalState for main loop");
   return (await ctx.db.get(

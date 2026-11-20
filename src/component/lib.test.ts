@@ -60,11 +60,9 @@ describe("lib", () => {
           onComplete,
         }));
         const ids = batch
-          ? await t.mutation(api.lib.enqueueBatch, { items, config: {} })
+          ? await t.mutation(api.lib.enqueueBatch, { items })
           : await Promise.all(
-              items.map((item) =>
-                t.mutation(api.lib.enqueue, { ...item, config: {} }),
-              ),
+              items.map((item) => t.mutation(api.lib.enqueue, { ...item })),
             );
         expect(
           await t.run(async (ctx) =>
@@ -98,9 +96,8 @@ describe("lib", () => {
           batch
             ? t.mutation(api.lib.enqueueBatch, {
                 items: [item, invalid],
-                config: {},
               })
-            : t.mutation(api.lib.enqueue, { ...invalid, config: {} }),
+            : t.mutation(api.lib.enqueue, { ...invalid }),
         ).rejects.toThrow(/Validator error/);
         await t.run(async (ctx) => {
           expect(await ctx.db.query("work").collect()).toEqual([]);
@@ -118,10 +115,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       expect(id).toBeDefined();
@@ -136,7 +129,6 @@ describe("lib", () => {
         fnArgs: {},
         fnType: "mutation",
         runAt: Date.now() + 60_000,
-        config: {},
       });
       await t.run(async (ctx) => {
         const pending = await ctx.db.query("pendingStart").unique();
@@ -145,38 +137,6 @@ describe("lib", () => {
           pending._id,
         );
       });
-    });
-
-    it("should throw error if maxParallelism is too high", async () => {
-      await expect(
-        t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
-          fnName: "testFunction",
-          fnArgs: { test: true },
-          fnType: "mutation",
-          runAt: Date.now(),
-          config: {
-            maxParallelism: 500, // More than MAX_POSSIBLE_PARALLELISM
-            logLevel: "WARN",
-          },
-        }),
-      ).rejects.toThrow("maxParallelism must be <= 200");
-    });
-
-    it("should throw error if maxParallelism is too low", async () => {
-      await expect(
-        t.mutation(api.lib.enqueue, {
-          fnHandle: "testHandle",
-          fnName: "testFunction",
-          fnArgs: { test: true },
-          fnType: "mutation",
-          runAt: Date.now(),
-          config: {
-            maxParallelism: -1, // Less than minimum
-            logLevel: "WARN",
-          },
-        }),
-      ).rejects.toThrow("maxParallelism must be >= 0");
     });
   });
 
@@ -188,15 +148,10 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "WARN",
       });
 
       // Verify a pending cancelation was created
@@ -216,22 +171,16 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Cancel the first time
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "WARN",
       });
 
       // Cancel the second time
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "WARN",
       });
 
       // Verify only one pending cancelation was created
@@ -251,10 +200,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Delete the work item
@@ -265,7 +210,6 @@ describe("lib", () => {
       // Try to cancel the deleted work
       await t.mutation(api.lib.cancel, {
         id,
-        logLevel: "WARN",
       });
 
       // Verify no pending cancelation was created
@@ -288,16 +232,11 @@ describe("lib", () => {
           fnArgs: { test: i },
           fnType: "mutation",
           runAt: Date.now() + 5 * 60 * 1000,
-          config: {
-            maxParallelism: 10,
-            logLevel: "WARN",
-          },
         });
         ids.push(id);
       }
 
       await t.mutation(api.lib.cancelAll, {
-        logLevel: "WARN",
         before: Date.now() + 1000,
       });
 
@@ -323,15 +262,10 @@ describe("lib", () => {
           fnArgs: { test: i },
           fnType: "mutation",
           runAt: Date.now(),
-          config: {
-            maxParallelism: 10,
-            logLevel: "WARN",
-          },
         });
       }
 
       await t.mutation(api.lib.cancelAll, {
-        logLevel: "WARN",
         before: Date.now() + 1000,
       });
 
@@ -401,10 +335,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
       await t.run(async (ctx) => {
         await ctx.db.delete("work", id);
@@ -421,10 +351,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Verify work item and pending start were created
@@ -447,10 +373,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Delete the pendingStart to simulate work in progress
@@ -476,10 +398,6 @@ describe("lib", () => {
           maxAttempts: 3,
           initialBackoffMs: 100,
           base: 2,
-        },
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
         },
       });
 
@@ -510,10 +428,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Delete the pendingStart and add pendingCancelation to simulate cancellation in progress
@@ -543,10 +457,6 @@ describe("lib", () => {
         fnArgs: { test: true },
         fnType: "mutation",
         runAt: Date.now(),
-        config: {
-          maxParallelism: 10,
-          logLevel: "WARN",
-        },
       });
 
       // Delete the pendingStart and add pendingCompletion with retry=false

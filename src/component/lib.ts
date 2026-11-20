@@ -9,15 +9,9 @@ import {
   type QueryCtx,
 } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
-import {
-  createLogger,
-  type Logger,
-  type LogLevel,
-  logLevel,
-} from "./logging.js";
+import { createLogger, type Logger, type LogLevel } from "./logging.js";
 import {
   boundScheduledTime,
-  vConfig,
   fnType,
   vOnCompleteFnContext,
   retryBehavior,
@@ -26,7 +20,7 @@ import {
   toTimestamp,
 } from "./shared.js";
 import { recordEnqueued } from "./stats.js";
-import { getOrUpdateGlobals } from "./config.js";
+import { getConfig } from "./config.js";
 import { findPendingStart } from "./pendingStart.js";
 
 const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
@@ -43,15 +37,11 @@ const itemArgs = {
   onComplete: v.optional(vOnCompleteFnContext),
   retryBehavior: v.optional(retryBehavior),
 };
-const enqueueArgs = {
-  ...itemArgs,
-  config: vConfig.partial(),
-};
 export const enqueue = mutation({
-  args: enqueueArgs,
+  args: itemArgs,
   returns: v.id("work"),
-  handler: async (ctx, { config, ...itemArgs }) => {
-    const globals = await getOrUpdateGlobals(ctx, config);
+  handler: async (ctx, itemArgs) => {
+    const globals = await getConfig(ctx);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
     return await enqueueHandler(ctx, console, itemArgs);
@@ -139,11 +129,10 @@ export async function enqueueHandler(
 export const enqueueBatch = mutation({
   args: {
     items: v.array(v.object(itemArgs)),
-    config: vConfig.partial(),
   },
   returns: v.array(v.id("work")),
-  handler: async (ctx, { config, items }) => {
-    const globals = await getOrUpdateGlobals(ctx, config);
+  handler: async (ctx, { items }) => {
+    const globals = await getConfig(ctx);
     const console = createLogger(globals.logLevel);
     await kickMainLoop(ctx, "enqueue");
     return Promise.all(items.map((item) => enqueueHandler(ctx, console, item)));
@@ -153,10 +142,9 @@ export const enqueueBatch = mutation({
 export const cancel = mutation({
   args: {
     id: v.id("work"),
-    logLevel: v.optional(logLevel),
   },
-  handler: async (ctx, { id, logLevel }) => {
-    const globals = await getOrUpdateGlobals(ctx, { logLevel });
+  handler: async (ctx, { id }) => {
+    const globals = await getConfig(ctx);
     const shouldCancel = await shouldCancelWorkItem(ctx, id, globals.logLevel);
     if (shouldCancel) {
       await kickMainLoop(ctx, "cancel");
@@ -171,11 +159,10 @@ export const cancel = mutation({
 const PAGE_SIZE = 64;
 export const cancelAll = mutation({
   args: {
-    logLevel: v.optional(logLevel),
     before: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, { logLevel, before, limit }) => {
+  handler: async (ctx, { before, limit }) => {
     const beforeTime = before ?? Date.now();
     const pageSize = limit ?? PAGE_SIZE;
     const pageOfWork = await ctx.db
@@ -183,7 +170,7 @@ export const cancelAll = mutation({
       .withIndex("by_creation_time", (q) => q.lte("_creationTime", beforeTime))
       .order("desc")
       .take(pageSize);
-    const globals = await getOrUpdateGlobals(ctx, { logLevel });
+    const globals = await getConfig(ctx);
     const shouldCancel = await Promise.all(
       pageOfWork.map(async ({ _id }) =>
         shouldCancelWorkItem(ctx, _id, globals.logLevel),
@@ -204,7 +191,6 @@ export const cancelAll = mutation({
     );
     if (pageOfWork.length === pageSize) {
       await ctx.scheduler.runAfter(0, api.lib.cancelAll, {
-        logLevel,
         before: pageOfWork[pageOfWork.length - 1]._creationTime,
         limit: pageSize,
       });

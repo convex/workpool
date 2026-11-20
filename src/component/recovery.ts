@@ -1,6 +1,7 @@
 import { type Infer, v } from "convex/values";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { createLogger } from "./logging.js";
+import { getConfig } from "./config.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
 
 const recoveryArgs = v.object({
@@ -39,8 +40,8 @@ export async function recoveryHandler(
   ctx: MutationCtx,
   { jobs }: Infer<typeof recoveryArgs>,
 ) {
-  const globals = await ctx.db.query("globals").unique();
-  const console = createLogger(globals?.logLevel);
+  const { logLevel } = await getConfig(ctx);
+  const console = createLogger(logLevel);
   const completionJobs: CompleteJob[] = [];
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];

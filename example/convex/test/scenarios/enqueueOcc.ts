@@ -3,10 +3,7 @@ import { v } from "convex/values";
 import { components, internal } from "../../_generated/api";
 import { internalAction, internalMutation } from "../../_generated/server";
 
-const pool = new Workpool(components.testWorkpool, {
-  maxParallelism: 1,
-  logLevel: "WARN",
-});
+const pool = new Workpool(components.serializedPool);
 
 export const blocker = internalAction({
   args: { durationMs: v.number() },
@@ -151,7 +148,7 @@ export const storm = internalAction({
     let blockerRunning = false;
     const startDeadline = Date.now() + 10_000;
     while (Date.now() < startDeadline) {
-      const status = await ctx.runQuery(components.testWorkpool.lib.status, {
+      const status = await ctx.runQuery(components.serializedPool.lib.status, {
         id: blockerId,
       });
       if (status.state === "running") {
@@ -266,7 +263,7 @@ export default internalAction({
     let blockerRunning = false;
     const startDeadline = Date.now() + 10_000;
     while (Date.now() < startDeadline) {
-      const status = await ctx.runQuery(components.testWorkpool.lib.status, {
+      const status = await ctx.runQuery(components.serializedPool.lib.status, {
         id: blockerId,
       });
       if (status.state === "running") {
