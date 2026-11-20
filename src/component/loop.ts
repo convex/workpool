@@ -22,6 +22,7 @@ import {
 } from "./logging.js";
 import {
   type Config,
+  countedAttempts,
   DEFAULT_MAX_PARALLELISM,
   fromTimestamp,
   fromSegment,
@@ -34,6 +35,7 @@ import {
 } from "./shared.js";
 import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
+import { assert } from "convex-helpers";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
@@ -62,6 +64,7 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     succeeded: 0,
     failed: 0,
     retries: 0,
+    rescheduled: 0,
     canceled: 0,
     lastReportTs: 0,
   },
@@ -75,6 +78,7 @@ const vCompletion = v.object({
   workId: v.id("work"),
   runResult: vResult,
   retry: v.boolean(),
+  rescheduleDelayMs: v.optional(v.number()),
   segment: v.int64(),
 });
 type Completion = Infer<typeof vCompletion>;
@@ -183,6 +187,9 @@ export const getBatch = internalQuery({
           workId: c.workId,
           runResult: c.runResult,
           retry: c.retry,
+          ...(c.rescheduleDelayMs !== undefined
+            ? { rescheduleDelayMs: c.rescheduleDelayMs }
+            : {}),
           segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
@@ -312,6 +319,7 @@ export const run = internalMutation({
         succeeded: 0,
         failed: 0,
         retries: 0,
+        rescheduled: 0,
         canceled: 0,
         lastReportTs,
       };
@@ -501,9 +509,14 @@ async function handleCompletions(
           console.warn(`[main] ${c.workId} is gone, but trying to complete`);
           return;
         }
-        if (await rescheduleJob(ctx, work, console)) {
-          state.report.retries++;
-          recordCompleted(console, work, "retrying", undefined);
+        if (await rescheduleJob(ctx, work, console, c.rescheduleDelayMs)) {
+          if (c.rescheduleDelayMs !== undefined) {
+            state.report.rescheduled = (state.report.rescheduled ?? 0) + 1;
+            recordCompleted(console, work, "rescheduled", undefined);
+          } else {
+            state.report.retries++;
+            recordCompleted(console, work, "retrying", undefined);
+          }
         } else {
           // We don't retry if it's been canceled in the mean time.
           state.report.canceled++;
@@ -776,7 +789,8 @@ async function beginWorkBatch(
 }
 
 /**
- * Reschedules a job for retry.
+ * Reschedules a job for retry, or after `delayMs` if the job asked to be
+ * rescheduled.
  * If it's been canceled in the mean time, don't retry.
  * @returns true if the job was rescheduled, false if it was not.
  */
@@ -784,6 +798,7 @@ async function rescheduleJob(
   ctx: MutationCtx,
   work: Doc<"work">,
   console: Logger,
+  delayMs: number | undefined,
 ): Promise<boolean> {
   const pendingCancelation = await ctx.db
     .query("pendingCancelation")
@@ -797,7 +812,7 @@ async function rescheduleJob(
   if (work.canceled) {
     return false;
   }
-  if (!work.retryBehavior) {
+  if (delayMs === undefined && !work.retryBehavior) {
     console.warn(`[main] ${work._id} has no retryBehavior so not retrying`);
     return false;
   }
@@ -806,10 +821,16 @@ async function rescheduleJob(
     console.error(`[main] ${work._id} already in pendingStart so not retrying`);
     return false;
   }
-  const backoffMs =
-    work.retryBehavior.initialBackoffMs *
-    Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
+  let nextAttempt: number;
+  if (delayMs !== undefined) {
+    nextAttempt = delayMs;
+  } else {
+    assert(work.retryBehavior);
+    const backoffMs =
+      work.retryBehavior.initialBackoffMs *
+      Math.pow(work.retryBehavior.base, countedAttempts(work) - 1);
+    nextAttempt = withJitter(backoffMs);
+  }
   // Date.now() is at least this mutation's snapshot, so retries cannot land
   // behind the incoming cursor, which is bounded by the query's snapshot.
   const segment = toTimestamp(Date.now() + nextAttempt);

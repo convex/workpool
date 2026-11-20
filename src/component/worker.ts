@@ -13,7 +13,7 @@ import {
   internalQuery,
   type ActionCtx,
 } from "./_generated/server.js";
-import { failedResult, isNonRetryableError } from "./errors.js";
+import { failedResult, getReschedule, isNonRetryableError } from "./errors.js";
 import { createLogger, type Logger, logLevel } from "./logging.js";
 import type { RunResult } from "./shared.js";
 import type { CompleteJob } from "./complete.js";
@@ -65,17 +65,8 @@ export const runMutationWrapper = internalMutation({
         ],
       });
     } catch (e: unknown) {
-      console.error(e);
-      const runResult = failedResult(e);
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult,
-            attempt,
-            nonRetryable: isNonRetryableError(e),
-          },
-        ],
+        jobs: [{ workId, attempt, ...failure(console, workId, e) }],
       });
     }
   },
@@ -92,6 +83,7 @@ export const runActionWrapper = internalAction({
 
     const status = await runOne(ctx, console, {
       ...args,
+      workId,
       fnType: "action",
     });
     await completeInline(ctx, console, {
@@ -151,6 +143,7 @@ async function runOne(
   ctx: ActionCtx,
   console: Logger,
   args: {
+    workId: Id<"work">;
     fnHandle: string;
     fnArgs?: Record<string, unknown>;
     payloadId?: Id<"payload">;
@@ -179,13 +172,22 @@ async function runOne(
     const runResult: RunResult = { kind: "success", returnValue };
     return { runResult, runOnCompleteInline: true };
   } catch (e: unknown) {
-    console.error(e);
     // We let the main loop handle the retries.
-    return {
-      runResult: failedResult(e),
-      nonRetryable: isNonRetryableError(e),
-    };
+    return failure(console, args.workId, e);
   }
+}
+
+/** How a job that threw should complete: rescheduled, or failed. */
+function failure(console: Logger, workId: Id<"work">, e: unknown) {
+  const reschedule = getReschedule(e);
+  if (reschedule) {
+    console.info(
+      `[worker] ${workId} rescheduled itself to run in ${reschedule.delayMs}ms`,
+    );
+    return { runResult: failedResult(e), reschedule };
+  }
+  console.error(e);
+  return { runResult: failedResult(e), nonRetryable: isNonRetryableError(e) };
 }
 
 // Helper mutation for actions to fetch work args

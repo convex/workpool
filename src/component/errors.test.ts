@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
 import {
+  getReschedule,
   getNonRetryableErrorMessage,
+  isRescheduleError,
+  RescheduleError,
   isNonRetryableError,
   NonRetryableError,
   failedResult,
@@ -84,5 +87,34 @@ describe("errors", () => {
   it("does not identify ordinary errors as non-retryable", () => {
     // Existing retry behavior depends on plain errors remaining retryable.
     expect(isNonRetryableError(new Error("temporary failure"))).toBe(false);
+  });
+
+  describe("RescheduleError", () => {
+    it("carries its delay in ConvexError data", () => {
+      const error = new RescheduleError({ delayMs: 5000 });
+      expect(getReschedule(error)).toEqual({ delayMs: 5000 });
+      expect(isNonRetryableError(error)).toBe(false);
+    });
+
+    it("defaults to no delay", () => {
+      expect(getReschedule(new RescheduleError())).toEqual({ delayMs: 0 });
+    });
+
+    it("is identified after crossing a function boundary", () => {
+      // Only ConvexError data survives ctx.runAction / ctx.runMutation.
+      const data = new RescheduleError({ delayMs: 10 }).data;
+      expect(getReschedule(new ConvexError(data))).toEqual({ delayMs: 10 });
+    });
+
+    it("ignores other errors", () => {
+      expect(isRescheduleError(new Error("nope"))).toBe(false);
+      expect(isRescheduleError(new ConvexError({ delayMs: 10 }))).toBe(false);
+      expect(isRescheduleError(new NonRetryableError("nope"))).toBe(false);
+    });
+
+    it("rejects invalid delays", () => {
+      expect(() => new RescheduleError({ delayMs: -1 })).toThrow();
+      expect(() => new RescheduleError({ delayMs: NaN })).toThrow();
+    });
   });
 });

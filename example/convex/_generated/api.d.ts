@@ -16,6 +16,7 @@ import type * as test_dashboard from "../test/dashboard.js";
 import type * as test_noisy from "../test/noisy.js";
 import type * as test_nonRetryable from "../test/nonRetryable.js";
 import type * as test_pool from "../test/pool.js";
+import type * as test_reschedule from "../test/reschedule.js";
 import type * as test_run from "../test/run.js";
 import type * as test_scenarios_bigArgs from "../test/scenarios/bigArgs.js";
 import type * as test_scenarios_bigContext from "../test/scenarios/bigContext.js";
@@ -43,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   "test/noisy": typeof test_noisy;
   "test/nonRetryable": typeof test_nonRetryable;
   "test/pool": typeof test_pool;
+  "test/reschedule": typeof test_reschedule;
   "test/run": typeof test_run;
   "test/scenarios/bigArgs": typeof test_scenarios_bigArgs;
   "test/scenarios/bigContext": typeof test_scenarios_bigContext;

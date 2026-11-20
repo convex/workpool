@@ -53,7 +53,7 @@ export function recordStarted(
 export function recordCompleted(
   console: Logger,
   work: Doc<"work">,
-  status: "success" | "failed" | "canceled" | "retrying",
+  status: "success" | "failed" | "canceled" | "retrying" | "rescheduled",
   onCompleteScheduledFunctionId: Id<"_scheduled_functions"> | undefined,
 ) {
   console.event("completed", {
@@ -132,8 +132,10 @@ function recordReport(
   report: Doc<"internalState">["report"] & { running: number; backlog: number },
 ) {
   const { completed, failed, retries } = report;
-  const withoutRetries = completed - retries;
-  const failureRate = completed ? (failed + retries) / completed : 0;
+  // Rescheduled attempts aren't failures, so leave them out of the rates.
+  const attempted = completed - (report.rescheduled ?? 0);
+  const withoutRetries = attempted - retries;
+  const failureRate = attempted ? (failed + retries) / attempted : 0;
   const permanentFailureRate = withoutRetries ? failed / withoutRetries : 0;
   console.event("report", {
     ...report,

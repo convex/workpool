@@ -5,7 +5,12 @@ import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
 import { createLogger } from "./logging.js";
-import { type OnCompleteArgs, type RunResult, vResult } from "./shared.js";
+import {
+  countedAttempts,
+  type OnCompleteArgs,
+  type RunResult,
+  vResult,
+} from "./shared.js";
 import { recordCompleted } from "./stats.js";
 import { assert } from "convex-helpers";
 
@@ -18,6 +23,8 @@ const completeArgs = v.object({
       workId: v.id("work"),
       attempt: v.number(),
       nonRetryable: v.optional(v.boolean()),
+      // The job threw RescheduleError: run it again without using an attempt.
+      reschedule: v.optional(v.object({ delayMs: v.number() })),
       // TODO: need to be careful about removing this field later
       runOnCompleteInline: v.optional(v.boolean()),
     }),
@@ -37,6 +44,7 @@ export async function completeHandler(
     runResult: RunResult;
     workId: Id<"work">;
     retry: boolean;
+    rescheduleDelayMs?: number;
   }[] = [];
   const jobAndWorks = (
     await Promise.all(
@@ -103,8 +111,15 @@ export async function completeHandler(
 
   await Promise.all(
     ourBatch.map(async ({ work, job }) => {
+      // attempts always increments: it's how we ignore duplicate completions.
       work.attempts++;
-      await ctx.db.patch("work", work._id, { attempts: work.attempts });
+      if (job.reschedule) {
+        work.skippedAttempts = (work.skippedAttempts ?? 0) + 1;
+      }
+      await ctx.db.patch("work", work._id, {
+        attempts: work.attempts,
+        skippedAttempts: work.skippedAttempts,
+      });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -115,10 +130,11 @@ export async function completeHandler(
       }
       const maxAttempts = work.retryBehavior?.maxAttempts;
       const retry =
-        job.runResult.kind === "failed" &&
-        !job.nonRetryable &&
-        !!maxAttempts &&
-        work.attempts < maxAttempts;
+        !!job.reschedule ||
+        (job.runResult.kind === "failed" &&
+          !job.nonRetryable &&
+          !!maxAttempts &&
+          countedAttempts(work) < maxAttempts);
       if (!retry) {
         let scheduledId = undefined;
         if (
@@ -198,6 +214,9 @@ export async function completeHandler(
           runResult: stripResult(job.runResult),
           workId: job.workId,
           retry,
+          ...(job.reschedule
+            ? { rescheduleDelayMs: job.reschedule.delayMs }
+            : {}),
         });
       }
     }),
