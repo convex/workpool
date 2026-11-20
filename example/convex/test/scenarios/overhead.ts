@@ -98,7 +98,6 @@ export default internalAction({
       pool: usePool ? poolKind : undefined,
     });
     const scenarioStart = Date.now();
-    // run.start already configured the right component's maxParallelism.
     const pool = usePool ? makePool(poolKind, { maxParallelism }) : null;
 
     console.log(

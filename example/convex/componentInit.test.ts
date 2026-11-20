@@ -27,11 +27,11 @@ describe.skipIf(!supportsInit)("init args from convex.config.ts", () => {
     workpool.register(t, "bigPool");
     workpool.register(t, "serializedPool");
     await t.mutation(api.example.enqueueOneMutation, { data: 1 });
-    expect((await readConfig(t, "bigPool")).init).toEqual({
+    expect(await readConfig(t, "bigPool")).toMatchObject({
       maxParallelism: 20,
       logLevel: "INFO",
     });
-    expect((await readConfig(t, "serializedPool")).init).toEqual({
+    expect(await readConfig(t, "serializedPool")).toMatchObject({
       maxParallelism: 1,
       logLevel: "INFO",
     });
@@ -41,13 +41,13 @@ describe.skipIf(!supportsInit)("init args from convex.config.ts", () => {
     const t = initConvexTest();
     workpool.register(t, "smallPool");
     await (t as any).runInits();
-    expect((await readConfig(t, "smallPool")).init.maxParallelism).toBe(3);
+    expect((await readConfig(t, "smallPool")).maxParallelism).toBe(3);
 
     workpool.register(t, "smallPool", { maxParallelism: 8 });
     await (t as any).runInits();
     const config = await readConfig(t, "smallPool");
-    expect(config.init).toEqual({ maxParallelism: 8 });
-    expect(config.logLevel).toBe("REPORT");
+    expect(config.maxParallelism).toBe(8);
+    expect(config.logLevel).toBeUndefined();
   });
 
   test("invalid args fail the push", async () => {

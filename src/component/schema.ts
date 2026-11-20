@@ -2,7 +2,6 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   fnType,
-  vConfig,
   vInitConfig,
   vOnCompleteFnContext,
   retryBehavior,
@@ -18,11 +17,11 @@ const segment = v.commitTs();
 const timestamp = v.int64();
 
 export default defineSchema({
-  // Singleton. `init` is written by the component's init on each push; the
-  // top-level fields are the legacy per-call config from the client class.
+  // Singleton holding the init args, written by the component's init on push,
+  // and the runtime overrides written by `config.update`.
   globals: defineTable({
-    ...vConfig.fields,
-    init: v.optional(vInitConfig),
+    ...vInitConfig.fields,
+    overrides: v.optional(vInitConfig),
   }),
   // Singleton, only read & written by `run`.
   internalState: defineTable({

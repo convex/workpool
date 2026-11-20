@@ -145,10 +145,7 @@ const fixtures = {
 };
 const { internal, createTest } = app.defineModules({ callbacks: fixtures });
 const refs = internal.callbacks;
-const pool = new Workpool(app.components.workpool, {
-  maxParallelism: 3,
-  logLevel: "ERROR",
-});
+const pool = new Workpool(app.components.workpool);
 const retries = { maxAttempts: 3, initialBackoffMs: 1, base: 2 };
 type Kind = "action" | "mutation" | "query";
 type Mode = "all" | "failed" | "canceled";

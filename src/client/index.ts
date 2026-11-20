@@ -21,9 +21,7 @@ import {
   type VString,
 } from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
-import { type LogLevel } from "../component/logging.js";
 import {
-  type Config,
   DEFAULT_RETRY_BEHAVIOR,
   type RetryBehavior,
   type RunResult,
@@ -79,7 +77,7 @@ export class Workpool {
    */
   constructor(
     public component: WorkpoolComponent,
-    public options: WorkpoolOptions,
+    public options: WorkpoolOptions = {},
   ) {}
 
   /**
@@ -110,7 +108,6 @@ export class Workpool {
     );
     return enqueue(this.component, ctx, "action", fn, fnArgs, {
       retryBehavior,
-      ...this.options,
       ...options,
     });
   }
@@ -149,7 +146,6 @@ export class Workpool {
     );
     return enqueueBatch(this.component, ctx, "action", fn, argsArray, {
       retryBehavior,
-      ...this.options,
       ...options,
     });
   }
@@ -179,7 +175,6 @@ export class Workpool {
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "mutation", fn, fnArgs, {
-      ...this.options,
       ...options,
     });
   }
@@ -210,7 +205,6 @@ export class Workpool {
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "mutation", fn, argsArray, {
-      ...this.options,
       ...options,
     });
   }
@@ -239,7 +233,6 @@ export class Workpool {
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
     return enqueue(this.component, ctx, "query", fn, fnArgs, {
-      ...this.options,
       ...options,
     });
   }
@@ -271,7 +264,6 @@ export class Workpool {
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
     return enqueueBatch(this.component, ctx, "query", fn, argsArray, {
-      ...this.options,
       ...options,
     });
   }
@@ -284,10 +276,7 @@ export class Workpool {
    * @param id - The ID of the work to cancel.
    */
   async cancel(ctx: MutationCtx | ActionCtx, id: WorkId): Promise<void> {
-    await ctx.runMutation(this.component.lib.cancel, {
-      id,
-      logLevel: this.options.logLevel,
-    });
+    await ctx.runMutation(this.component.lib.cancel, { id });
   }
   /**
    * Cancels all pending work items. See {@link cancel}.
@@ -298,10 +287,7 @@ export class Workpool {
     ctx: MutationCtx | ActionCtx,
     options?: { limit?: number },
   ): Promise<void> {
-    await ctx.runMutation(this.component.lib.cancelAll, {
-      logLevel: this.options.logLevel,
-      ...options,
-    });
+    await ctx.runMutation(this.component.lib.cancelAll, { ...options });
   }
 
   /**
@@ -423,27 +409,10 @@ export type RetryOption = {
 };
 
 /**
- * `maxParallelism` and `logLevel` can instead be passed as `args` when
- * installing the component (`app.use(workpool, { args: { maxParallelism } })`),
- * and the init args win when both are set.
+ * `maxParallelism` and `logLevel` are passed as `args` when installing the
+ * component: `app.use(workpool, { args: { maxParallelism: 10 } })`.
  */
-export type WorkpoolOptions = {
-  /** How many actions/mutations can be running at once within this pool.
-   * Suggested max: 100 on Pro, 20 on free plan.
-   * If set to 0, no new work will be started.
-   */
-  maxParallelism?: number;
-  /** How much to log. This is updated on each call to `enqueue*`,
-   * `status`, or `cancel*`.
-   * Default is REPORT, which logs warnings, errors, and a periodic report.
-   * With INFO, you can also see events for started and completed work.
-   * Stats generated can be parsed by tools like
-   * [Axiom](https://axiom.co) for monitoring.
-   * With DEBUG, you can see timers and internal events for work being
-   * scheduled.
-   */
-  logLevel?: LogLevel;
-} & WorkpoolRetryOptions;
+export type WorkpoolOptions = WorkpoolRetryOptions;
 
 export type WorkpoolRetryOptions = {
   /** Default retry behavior for enqueued actions.
@@ -574,8 +543,7 @@ async function enqueueArgs<Context, ReturnType>(
     | FunctionReference<FunctionType, FunctionVisibility>
     | FunctionHandle<FunctionType, DefaultFunctionArgs>,
   opts:
-    | (EnqueueOptions<Context, ReturnType> &
-        Partial<Config> & { retryBehavior?: RetryBehavior })
+    | (EnqueueOptions<Context, ReturnType> & { retryBehavior?: RetryBehavior })
     | undefined,
 ) {
   const [fnHandle, fnName] =
@@ -596,10 +564,6 @@ async function enqueueArgs<Context, ReturnType>(
       : undefined,
     runAt: getRunAt(opts),
     retryBehavior: opts?.retryBehavior,
-    config: {
-      logLevel: opts?.logLevel,
-      maxParallelism: opts?.maxParallelism,
-    },
   } satisfies Omit<
     FunctionArgs<ComponentApi["lib"]["enqueue"]>,
     "fnArgs" | "fnType"
@@ -639,11 +603,9 @@ export async function enqueueBatch<
   fnArgsArray: Array<Args>,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
-    maxParallelism?: number;
-    logLevel?: LogLevel;
   },
 ): Promise<WorkId[]> {
-  const { config, ...defaults } = await enqueueArgs(fn, options);
+  const defaults = await enqueueArgs(fn, options);
   const batches = [];
   const MAX_BATCH_SIZE = 8_000_000;
   let currentBatch = [];
@@ -681,7 +643,6 @@ export async function enqueueBatch<
   for (const batch of batches) {
     const ids = await ctx.runMutation(component.lib.enqueueBatch, {
       items: batch.items,
-      config,
     });
     allIds.push(...(ids as WorkId[]));
   }
@@ -702,8 +663,6 @@ export async function enqueue<
   fnArgs: Args,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
-    maxParallelism?: number;
-    logLevel?: LogLevel;
   },
 ): Promise<WorkId> {
   const id = await ctx.runMutation(component.lib.enqueue, {

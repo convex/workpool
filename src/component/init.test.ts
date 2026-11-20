@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "./_generated/api.js";
 import { getConfig } from "./config.js";
+import { DEFAULT_LOG_LEVEL } from "./logging.js";
+import { DEFAULT_MAX_PARALLELISM } from "./shared.js";
 import { setupTest } from "./setup.test.js";
 
 // The component's own tests run it as the app, where inits don't run on their
@@ -24,11 +26,7 @@ describe("init", () => {
       logLevel: "ERROR",
     });
     const first = await t.run((ctx) => ctx.db.query("globals").unique());
-    expect(first?.init).toEqual({ maxParallelism: 3, logLevel: "ERROR" });
-    expect(await t.run(getConfig)).toMatchObject({
-      maxParallelism: 3,
-      logLevel: "ERROR",
-    });
+    expect(first).toMatchObject({ maxParallelism: 3, logLevel: "ERROR" });
 
     await t.mutation(internal.init.init, {
       maxParallelism: 3,
@@ -38,7 +36,22 @@ describe("init", () => {
     expect(second).toEqual([first]);
   });
 
-  it("replaces the init config when args change, and drops removed args", async () => {
+  it("keeps a config.update override across pushes until it's updated", async () => {
+    const t = setupTest();
+    await t.mutation(internal.init.init, { maxParallelism: 3 });
+    await t.mutation(api.config.update, { maxParallelism: 0 });
+    const effective = () =>
+      t.run(async (ctx) => (await getConfig(ctx)).maxParallelism);
+    expect(await effective()).toBe(0);
+
+    await t.mutation(internal.init.init, { maxParallelism: 8 });
+    expect(await effective()).toBe(0);
+
+    await t.mutation(api.config.update, { maxParallelism: 5 });
+    expect(await effective()).toBe(5);
+  });
+
+  it("replaces the config when args change, and defaults removed args", async () => {
     const t = setupTest();
     await t.mutation(internal.init.init, {
       maxParallelism: 3,
@@ -69,23 +82,17 @@ describe("init", () => {
     ).rejects.toThrow(/maxParallelism must be <= 200/);
   });
 
-  it("wins over per-call client options, which still apply without it", async () => {
+  it("supplies the config enqueue reads, with defaults before it runs", async () => {
     const t = setupTest();
-    await t.mutation(api.lib.enqueue, {
-      ...enqueueAction,
-      config: { maxParallelism: 4 },
+    await t.mutation(api.lib.enqueue, enqueueAction);
+    expect(await t.run(getConfig)).toEqual({
+      maxParallelism: DEFAULT_MAX_PARALLELISM,
+      logLevel: DEFAULT_LOG_LEVEL,
     });
-    expect((await t.run(getConfig)).maxParallelism).toBe(4);
+    expect(await t.run((ctx) => ctx.db.query("globals").unique())).toBeNull();
 
     await t.mutation(internal.init.init, { maxParallelism: 9 });
-    await t.mutation(api.lib.enqueue, {
-      ...enqueueAction,
-      config: { maxParallelism: 4 },
-    });
+    await t.mutation(api.lib.enqueue, enqueueAction);
     expect((await t.run(getConfig)).maxParallelism).toBe(9);
-
-    // Dropping the arg falls back to the last per-call value.
-    await t.mutation(internal.init.init, {});
-    expect((await t.run(getConfig)).maxParallelism).toBe(4);
   });
 });

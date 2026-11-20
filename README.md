@@ -22,15 +22,18 @@ these are scheduled with `ctx.scheduler.runAfter`, they'll compete with each
 other for resources. The emails might be delayed if there are too many scraping
 requests queued ahead of them.
 
-To resolve this problem, you can separate work into different pools.
+To resolve this problem, you can separate work into different pools, each with
+its own `maxParallelism` set in `convex.config.ts`:
 
 ```ts
-const emailPool = new Workpool(components.emailWorkpool, {
-  maxParallelism: 10,
-});
-const scrapePool = new Workpool(components.scrapeWorkpool, {
-  maxParallelism: 5,
-});
+// convex/convex.config.ts
+app.use(workpool, { name: "emailWorkpool", args: { maxParallelism: 10 } });
+app.use(workpool, { name: "scrapeWorkpool", args: { maxParallelism: 5 } });
+```
+
+```ts
+const emailPool = new Workpool(components.emailWorkpool);
+const scrapePool = new Workpool(components.scrapeWorkpool);
 
 export const userSignUp = mutation({
   args: {...},
@@ -202,9 +205,12 @@ calling the mutation on a workpool with `maxParallelism: 1`, it will never throw
 an error due to conflicts with parallel mutations.
 
 ```ts
-const counterPool = new Workpool(components.counterWorkpool, {
-  maxParallelism: 1,
-});
+// convex/convex.config.ts
+app.use(workpool, { name: "counterWorkpool", args: { maxParallelism: 1 } });
+```
+
+```ts
+const counterPool = new Workpool(components.counterWorkpool);
 
 export const doSomethingAndCount = action({
   handler: async (ctx) => {
@@ -296,8 +302,8 @@ import { defineApp } from "convex/server";
 import workpool from "@convex-dev/workpool/convex.config.js";
 
 const app = defineApp();
-app.use(workpool, { name: "emailWorkpool" });
-app.use(workpool, { name: "scrapeWorkpool" });
+app.use(workpool, { name: "emailWorkpool", args: { maxParallelism: 10 } });
+app.use(workpool, { name: "scrapeWorkpool", args: { maxParallelism: 5 } });
 export default app;
 ```
 
@@ -305,24 +311,26 @@ See example usage in [example.ts](./example/convex/example.ts).
 
 ### Configuring the Workpool
 
-Check out the [docstrings](./src/client/index.ts), but notable options include:
+Each installation takes its config as `args` in `convex.config.ts`, applied on
+every `npx convex deploy` or `npx convex dev` push:
 
 - `maxParallelism`: How many actions/mutations can run at once within this pool.
   Avoid exceeding 100 on Pro, 20 on the free plan, across all workpools and
-  workflows.
+  workflows. Set it to 0 to pause starting new work. Default: 10.
+- `logLevel`: How much to log. Default: `"REPORT"`.
+
+To scale or pause a pool without a push, call
+`ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 0 })`
+(or run it with `npx convex run` or from the dashboard). These runtime overrides
+win over the `args` and persist across pushes until you update them again.
+
+The `Workpool` class takes client-side retry defaults (see the
+[docstrings](./src/client/index.ts)):
+
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
 
 You can override the retry behavior per-call with the `retry` option.
-
-If you don't specify a `maxParallelism` as a Class-level option, you can specify
-it at runtime by calling
-`ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 20 })`
-(you can also call the function with `npx convex run` or the dashboard) This can
-be useful for dynamic scaling of the workpool, and also setting it to 0 to pause
-work. If specified on the Workpool class, it will update on each call to enqueue
-or cancel. Tip: you can create the Workpool class at runtime based on a dynamic
-value, such as an environment variable.
 
 ### Options for enqueueing work
 

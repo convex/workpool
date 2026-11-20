@@ -15,9 +15,7 @@ import {
 } from "@convex-dev/workpool";
 
 const smallPool = new Workpool(components.smallPool, {
-  maxParallelism: 3,
   retryActionsByDefault: true,
-  logLevel: "INFO",
 });
 
 const ATTEMPT_EVENT = "nonRetryableAttempt";

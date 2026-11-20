@@ -108,15 +108,14 @@ void ({} as RetryBehavior satisfies Infer<typeof retryBehavior>);
 
 /**
  * Per-installation config passed by the parent in
- * `app.use(workpool, { args })`. Also stored verbatim on the globals document,
- * so this is shared between the init's `args` and the schema.
+ * `app.use(workpool, { args })`. Stored verbatim as the globals document, so
+ * this is shared between the init's `args` and the schema.
  */
 export const initArgs = {
   maxParallelism: v.optional(v.number()),
   logLevel: v.optional(logLevel),
 };
 export const vInitConfig = v.object(initArgs);
-export type InitConfig = Infer<typeof vInitConfig>;
 
 export const vResult = vRunResult(v.any());
 export function vRunResult<RV extends Validator<any, any, any> = VAny>(

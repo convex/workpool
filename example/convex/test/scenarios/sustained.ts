@@ -125,7 +125,6 @@ export default internalAction({
       pool: poolKind,
     });
 
-    // run.start already configured the right component's maxParallelism.
     const pool = makePool(poolKind, { maxParallelism });
 
     console.log(
