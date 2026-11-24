@@ -75,6 +75,7 @@
     "convex-helpers": "^0.1.94"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
     "@convex-dev/eslint-plugin": "5.0.1",
     "@convex-dev/static-hosting": "0.2.2",
