@@ -324,6 +324,21 @@ work. If specified on the Workpool class, it will update on each call to enqueue
 or cancel. Tip: you can create the Workpool class at runtime based on a dynamic
 value, such as an environment variable.
 
+### Pausing and resuming a pool
+
+Call `await pool.pause(ctx)` to suspend the pool loop. Enqueues still return
+work IDs, including when you pause before the first enqueue. Once pause commits,
+the pool dispatches no more jobs until resumed. Jobs already dispatched can
+still start or finish, and their completion callbacks can run. The loop
+processes pending cancellations, retries, and slot cleanup when it resumes.
+
+Call `await pool.resume(ctx)` to wake the loop and process the backlog at the
+configured parallelism. Both operations are idempotent. The manual recovery
+mutation `kick:forceKick` also resumes a paused pool. Use
+`await pool.poolStatus(ctx)` to read `"idle"`, `"running"`, or `"paused"`. From
+the dashboard or CLI, the component functions are `pool:pause`, `pool:resume`,
+and `pool:status`.
+
 ### Options for enqueueing work
 
 See the [docstrings](./src/client/index.ts) for more details, but notable

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { components, internal } from "./_generated/api.js";
+import { api, components, internal } from "./_generated/api.js";
 import { kickMainLoop } from "./kick.js";
 import { WORKER_NAME } from "./shared.js";
 import { setupTest } from "./setup.test.js";
@@ -57,6 +57,14 @@ describe("kickMainLoop", () => {
       name: WORKER_NAME,
     });
   }
+
+  it("forceKick resumes a paused worker", async () => {
+    const t = setupTest();
+    await t.mutation(api.pool.pause, {});
+    expect(await t.query(api.pool.status, {})).toBe("paused");
+    await t.mutation(internal.kick.forceKick, {});
+    expect(await t.query(api.pool.status, {})).toBe("running");
+  });
 
   it("pings on enqueue", async () => {
     const t = setupTest();

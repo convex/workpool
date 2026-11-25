@@ -82,6 +82,21 @@ export class Workpool {
     public options: WorkpoolOptions,
   ) {}
 
+  /** Suspend the pool loop. Enqueues remain available and dispatched work may finish. */
+  async pause(ctx: MutationCtx | ActionCtx): Promise<void> {
+    await ctx.runMutation(this.component.pool.pause, {});
+  }
+
+  /** Wake a paused pool to process its backlog at the configured parallelism. */
+  async resume(ctx: MutationCtx | ActionCtx): Promise<void> {
+    await ctx.runMutation(this.component.pool.resume, {});
+  }
+
+  /** The lifecycle state of this pool, including idle before the first enqueue. */
+  poolStatus(ctx: QueryCtx): Promise<"idle" | "running" | "paused"> {
+    return ctx.runQuery(this.component.pool.status, {});
+  }
+
   /**
    * Enqueues an action to be run.
    *
@@ -627,7 +642,7 @@ export async function enqueueBatch<
   ReturnType,
   Context,
 >(
-  component: WorkpoolComponent,
+  component: Pick<WorkpoolComponent, "lib" | "config">,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
@@ -690,7 +705,7 @@ export async function enqueue<
   ReturnType,
   Context,
 >(
-  component: WorkpoolComponent,
+  component: Pick<WorkpoolComponent, "lib" | "config">,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
   fn: FunctionReference<FnType, FunctionVisibility, Args, NoInfer<ReturnType>>,
