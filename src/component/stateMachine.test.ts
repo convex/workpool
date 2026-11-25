@@ -559,7 +559,7 @@ describe("state machine", () => {
       expect(s.pendingCompletion.resultKind).toBe("failed");
     });
 
-    it("S2 running + complete(canceled) -> work deleted, pendingCompletion(canceled) releases its completing entry", async () => {
+    it("S2 running + complete(canceled) -> work deleted, pendingCompletion(canceled)", async () => {
       const { workId } = await setupState(S2_RUNNING);
       await runComplete(workId, { kind: "canceled" }, 0);
       const s = await observeState(workId);

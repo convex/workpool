@@ -102,6 +102,40 @@ describe("stats reports", () => {
     });
   });
 
+  it("reports only running work that holds a slot", async () => {
+    await t.run(async (ctx) => {
+      const workIds = [];
+      for (let i = 0; i < 2; i++) {
+        workIds.push(
+          await ctx.db.insert("work", {
+            fnType: "mutation",
+            fnHandle: "test",
+            fnName: "test",
+            attempts: 0,
+          }),
+        );
+      }
+      const scheduledId = await ctx.scheduler.runAfter(
+        0,
+        internal.loop.updateRunStatus,
+        {},
+      );
+      await ctx.db.patch("internalState", stateId, {
+        running: [
+          { workId: workIds[0]!, scheduledId, started: Date.now() },
+          {
+            workId: workIds[1]!,
+            scheduledId,
+            started: Date.now(),
+            completing: true,
+          },
+        ],
+      });
+    });
+    await report();
+    expect(reports()).toEqual([expect.objectContaining({ running: 1 })]);
+  });
+
   it("defers a large backlog count after a bounded read", async () => {
     for (let i = 0; i < 300; i++) await enqueue(toTimestamp(Date.now() - 1000));
     await t.run(async (ctx) => {

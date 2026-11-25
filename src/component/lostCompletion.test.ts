@@ -11,6 +11,7 @@ import batchWorker from "@convex-dev/batch-worker/test";
 import { api, internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation } from "./_generated/server.js";
+import { MAX_COMPLETING } from "./loop.js";
 import { MAX_COMPLETION_RERUNS } from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
@@ -20,6 +21,8 @@ const userRan = vi.fn<(name: string, attempt: number) => void>();
 const onCompleteRan = vi.fn<(context: string, kind: string) => void>();
 /** Remaining injected failures of `complete`, by work id. */
 const completeFaults = new Map<string, number>();
+/** Remaining injected failures of `complete` calls for canceled work. */
+let canceledCompleteFaults = 0;
 /** How many times the user function should throw before succeeding. */
 let userFailures = 0;
 
@@ -33,7 +36,18 @@ function setup() {
         complete: internalMutation({
           args: { jobs: v.array(v.any()) },
           handler: async (ctx, args) => {
-            for (const job of args.jobs as { workId: string }[]) {
+            const jobs = args.jobs as {
+              workId: string;
+              runResult: { kind: string };
+            }[];
+            if (
+              canceledCompleteFaults > 0 &&
+              jobs.some((job) => job.runResult.kind === "canceled")
+            ) {
+              canceledCompleteFaults--;
+              throw new Error("injected: complete(canceled) failed");
+            }
+            for (const job of jobs) {
               const remaining = completeFaults.get(job.workId) ?? 0;
               if (remaining > 0) {
                 completeFaults.set(job.workId, remaining - 1);
@@ -83,6 +97,8 @@ async function handles(t: T) {
   }));
 }
 
+const config = { maxParallelism: MAX_PARALLELISM, logLevel: "ERROR" } as const;
+
 async function enqueue(
   t: T,
   name: string,
@@ -95,7 +111,7 @@ async function enqueue(
     fnArgs: { name },
     fnType: "mutation",
     runAt: opts.runAt ?? Date.now(),
-    config: { maxParallelism: MAX_PARALLELISM, logLevel: "ERROR" },
+    config,
     onComplete: { fnHandle: h.onComplete, context: name },
     ...(opts.maxAttempts
       ? {
@@ -124,6 +140,8 @@ async function drive(t: T, ms: number) {
     const state = await internalState(t);
     const holding = state?.running.filter((r) => !r.completing) ?? [];
     expect(holding.length).toBeLessThanOrEqual(MAX_PARALLELISM);
+    const completing = state?.running.filter((r) => r.completing) ?? [];
+    expect(completing.length).toBeLessThanOrEqual(MAX_COMPLETING);
   }
 }
 
@@ -142,6 +160,7 @@ describe("lost completion", () => {
     userRan.mockClear();
     onCompleteRan.mockClear();
     completeFaults.clear();
+    canceledCompleteFaults = 0;
     userFailures = 0;
   });
   afterEach(() => vi.useRealTimers());
@@ -213,6 +232,54 @@ describe("lost completion", () => {
     ]);
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
     await expectFinished(t, a, b);
+  });
+
+  it("bounds the running list when canceled work's completions fail", async () => {
+    const t = setup();
+    const h = await handles(t);
+    const N = 600;
+    for (let i = 0; i < N; i += 100) {
+      await t.mutation(api.lib.enqueueBatch, {
+        config,
+        items: Array.from({ length: 100 }, (_, j) => ({
+          fnHandle: h.work,
+          fnName: `F${i + j}`,
+          fnArgs: { name: `F${i + j}` },
+          fnType: "mutation" as const,
+          runAt: Date.now() + 60 * MINUTE,
+          onComplete: { fnHandle: h.onComplete, context: `F${i + j}` },
+        })),
+      });
+    }
+    // Enough failed batches to reach the limit before recovery runs.
+    canceledCompleteFaults = Math.ceil(MAX_COMPLETING / 64) + 2;
+    await t.mutation(api.lib.cancelAll, {
+      logLevel: "ERROR",
+      limit: N,
+      before: Number.MAX_SAFE_INTEGER,
+    });
+    const b = await enqueue(t, "B");
+
+    // Cancelations wait while the running list is full of completing work,
+    // and B isn't blocked by them.
+    await drive(t, 10 * SECOND);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    const state = await internalState(t);
+    expect(state?.running.length).toBe(MAX_COMPLETING);
+    // Completing work isn't reported as running or as using capacity.
+    expect(await t.query(internal.stats.diagnostics, {})).toMatchObject({
+      running: 0,
+      spareCapacity: MAX_PARALLELISM,
+    });
+    expect(await t.query(internal.stats.running, {})).toEqual([]);
+
+    await drive(t, 30 * MINUTE);
+    const canceled = onCompleteRan.mock.calls.filter(
+      ([, kind]) => kind === "canceled",
+    );
+    expect(canceled).toHaveLength(N);
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
+    await expectFinished(t, b);
   });
 
   it("waits on a completion that's still pending in the scheduler", async () => {

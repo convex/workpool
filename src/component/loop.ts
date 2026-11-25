@@ -32,10 +32,19 @@ import {
   toTimestamp,
   vResult,
 } from "./shared.js";
-import { generateReport, recordCompleted, recordStarted } from "./stats.js";
+import {
+  countRunning,
+  generateReport,
+  recordCompleted,
+  recordStarted,
+} from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
 
-const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
+export const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
+// Canceled work waiting on its completion stays in `running` (as `completing`)
+// until the loop sees that completion. Stop taking cancelations past this many
+// so a mass cancel can't grow the running list without bound.
+export const MAX_COMPLETING = 4 * CANCELLATION_BATCH_SIZE;
 const RECOVERY_BATCH_SIZE = 32;
 const START_BATCH_SIZE = 32;
 // Bound per-iteration work to keep loop latency low.
@@ -371,14 +380,23 @@ async function queryPending(
     running: Doc<"internalState">["running"];
   },
 ) {
+  // Not capped at maxParallelism: canceled work's completions hold no slot.
   const completions = await ctx.db
     .query("pendingCompletion")
     .withIndex("segment", (q) => q.gte("segment", completionCursor))
-    .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
-  const cancelations = await ctx.db
-    .query("pendingCancelation")
-    .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
-    .take(CANCELLATION_BATCH_SIZE);
+    .take(MAIN_BATCH_SIZE);
+  const completing = running.length - countRunning(running);
+  const cancelLimit = Math.min(
+    CANCELLATION_BATCH_SIZE,
+    Math.max(0, MAX_COMPLETING - completing),
+  );
+  const cancelations =
+    cancelLimit > 0
+      ? await ctx.db
+          .query("pendingCancelation")
+          .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
+          .take(cancelLimit)
+      : [];
   // Only completions for running jobs free slots, even if duplicated.
   const completed = new Set(completions.map((c) => c.workId));
   const remainingRunning = countRunning(
@@ -609,13 +627,6 @@ async function scheduleCanceledCompletion(
       completing: true,
     });
   }
-}
-
-/** Running entries that hold a slot: not just waiting on a completion. */
-function countRunning(running: Doc<"internalState">["running"]) {
-  let count = 0;
-  for (const r of running) if (!r.completing) count++;
-  return count;
 }
 
 async function handleRecovery(
