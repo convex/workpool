@@ -382,13 +382,15 @@ describe("complete", () => {
         expect(work).toBeNull();
       });
 
-      // Verify no pendingCompletion was created for canceled jobs
+      // A canceled completion tells the loop to release its completing entry.
       await t.run(async (ctx) => {
         const pendingCompletions = await ctx.db
           .query("pendingCompletion")
           .withIndex("workId", (q) => q.eq("workId", workId))
           .collect();
-        expect(pendingCompletions).toHaveLength(0);
+        expect(pendingCompletions).toMatchObject([
+          { retry: false, runResult: { kind: "canceled" } },
+        ]);
       });
     });
 

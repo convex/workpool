@@ -153,8 +153,12 @@ describe("loop", () => {
       const pendingCancelation = await ctx.db
         .query("pendingCancelation")
         .collect();
+      const entries = state?.running ?? [];
       return {
-        running: state?.running ?? [],
+        // Entries holding a slot. `completing` entries only track a canceled
+        // job's completion.
+        running: entries.filter((r) => !r.completing),
+        completing: entries.filter((r) => r.completing),
         segmentCursors: state?.segmentCursors,
         lastRecovery: state?.lastRecovery ?? 0n,
         pendingStart,

@@ -1,0 +1,279 @@
+/**
+ * Work whose scheduled `complete` fails must not hold its slot forever (#276).
+ * Faults are injected by swapping the `complete` export in the module map, so
+ * everything else runs exactly as in production.
+ */
+import { createFunctionHandle, makeFunctionReference } from "convex/server";
+import { convexTest } from "convex-test";
+import { v } from "convex/values";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import batchWorker from "@convex-dev/batch-worker/test";
+import { api, internal } from "./_generated/api.js";
+import type { Id } from "./_generated/dataModel.js";
+import { internalMutation, mutation } from "./_generated/server.js";
+import { MAX_COMPLETION_RERUNS } from "./recovery.js";
+import schema from "./schema.js";
+import { modules } from "./setup.test.js";
+import { MINUTE, SECOND, vResult } from "./shared.js";
+
+const userRan = vi.fn<(name: string, attempt: number) => void>();
+const onCompleteRan = vi.fn<(context: string, kind: string) => void>();
+/** Remaining injected failures of `complete`, by work id. */
+const completeFaults = new Map<string, number>();
+/** How many times the user function should throw before succeeding. */
+let userFailures = 0;
+
+function setup() {
+  const t = convexTest(schema, {
+    ...modules,
+    "./complete.ts": async () => {
+      const actual = await import("./complete.js");
+      return {
+        ...actual,
+        complete: internalMutation({
+          args: { jobs: v.array(v.any()) },
+          handler: async (ctx, args) => {
+            for (const job of args.jobs as { workId: string }[]) {
+              const remaining = completeFaults.get(job.workId) ?? 0;
+              if (remaining > 0) {
+                completeFaults.set(job.workId, remaining - 1);
+                throw new Error("injected: complete failed");
+              }
+            }
+            return actual.completeHandler(ctx, args as never);
+          },
+        }),
+      };
+    },
+    "./userFns.ts": async () => ({
+      work: mutation({
+        args: { name: v.string() },
+        handler: async (ctx, { name }) => {
+          userRan(name, userRan.mock.calls.length);
+          if (userFailures > 0) {
+            userFailures--;
+            throw new Error("user function failed");
+          }
+          return name;
+        },
+      }),
+      onComplete: mutation({
+        args: { workId: v.string(), context: v.any(), result: vResult },
+        handler: async (_ctx, args) => {
+          onCompleteRan(args.context, args.result.kind);
+        },
+      }),
+    }),
+  });
+  batchWorker.register(t);
+  return t;
+}
+
+type T = ReturnType<typeof setup>;
+const MAX_PARALLELISM = 1;
+
+async function handles(t: T) {
+  return t.run(async () => ({
+    work: await createFunctionHandle(
+      makeFunctionReference<"mutation">("userFns:work"),
+    ),
+    onComplete: await createFunctionHandle(
+      makeFunctionReference<"mutation">("userFns:onComplete"),
+    ),
+  }));
+}
+
+async function enqueue(
+  t: T,
+  name: string,
+  opts: { runAt?: number; maxAttempts?: number } = {},
+) {
+  const h = await handles(t);
+  return t.mutation(api.lib.enqueue, {
+    fnHandle: h.work,
+    fnName: name,
+    fnArgs: { name },
+    fnType: "mutation",
+    runAt: opts.runAt ?? Date.now(),
+    config: { maxParallelism: MAX_PARALLELISM, logLevel: "ERROR" },
+    onComplete: { fnHandle: h.onComplete, context: name },
+    ...(opts.maxAttempts
+      ? {
+          retryBehavior: {
+            maxAttempts: opts.maxAttempts,
+            initialBackoffMs: 100,
+            base: 2,
+          },
+        }
+      : {}),
+  });
+}
+
+async function internalState(t: T) {
+  return t.run(async (ctx) => ctx.db.query("internalState").first());
+}
+
+/**
+ * Advance simulated time, running whatever is due, and check after each step
+ * that no more than maxParallelism entries hold a slot.
+ */
+async function drive(t: T, ms: number) {
+  for (let elapsed = 0; elapsed < ms; elapsed += 2 * SECOND) {
+    vi.advanceTimersByTime(2 * SECOND);
+    await t.finishInProgressScheduledFunctions();
+    const state = await internalState(t);
+    const holding = state?.running.filter((r) => !r.completing) ?? [];
+    expect(holding.length).toBeLessThanOrEqual(MAX_PARALLELISM);
+  }
+}
+
+async function expectFinished(t: T, ...ids: Id<"work">[]) {
+  for (const id of ids) {
+    expect(await t.query(api.lib.status, { id })).toEqual({
+      state: "finished",
+    });
+  }
+  expect((await internalState(t))?.running).toEqual([]);
+}
+
+describe("lost completion", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    userRan.mockClear();
+    onCompleteRan.mockClear();
+    completeFaults.clear();
+    userFailures = 0;
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("re-runs a failed completion without re-running the mutation", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A");
+    completeFaults.set(a, 1);
+    const b = await enqueue(t, "B");
+
+    await drive(t, 15 * MINUTE);
+
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
+    expect(onCompleteRan.mock.calls).toEqual([
+      ["A", "success"],
+      ["B", "success"],
+    ]);
+    await expectFinished(t, a, b);
+  });
+
+  it("keeps the retry policy when a failure's completion is lost", async () => {
+    const t = setup();
+    userFailures = 1;
+    const a = await enqueue(t, "A", { maxAttempts: 3 });
+    completeFaults.set(a, 1);
+
+    await drive(t, 15 * MINUTE);
+
+    // The failed attempt's writes rolled back, so retrying it is safe.
+    expect(userRan).toHaveBeenCalledTimes(2);
+    expect(onCompleteRan.mock.calls).toEqual([["A", "success"]]);
+    await expectFinished(t, a);
+  });
+
+  it("gives up after repeated failures and frees the slot", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A");
+    completeFaults.set(a, Infinity);
+    const b = await enqueue(t, "B");
+
+    await drive(t, 20 * MINUTE);
+
+    // A committed once and is never re-run; B is no longer blocked.
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    await expectFinished(t, b);
+    const work = await t.run((ctx) => ctx.db.get("work", a));
+    expect(work?.completionReruns).toBe(MAX_COMPLETION_RERUNS);
+  });
+
+  it("re-runs a failed completion for work canceled before it started", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A", { runAt: Date.now() + 60 * MINUTE });
+    completeFaults.set(a, 1);
+    await t.mutation(api.lib.cancel, { id: a, logLevel: "ERROR" });
+    const b = await enqueue(t, "B");
+
+    // A's lost completion doesn't take B's slot.
+    await drive(t, 10 * SECOND);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    expect((await internalState(t))?.running).toMatchObject([
+      { workId: a, completing: true },
+    ]);
+
+    await drive(t, 15 * MINUTE);
+    expect(onCompleteRan.mock.calls).toEqual([
+      ["B", "success"],
+      ["A", "canceled"],
+    ]);
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
+    await expectFinished(t, a, b);
+  });
+
+  it("waits on a completion that's still pending in the scheduler", async () => {
+    const t = setup();
+    const job = await t.run(async (ctx) => {
+      const workId = await ctx.db.insert("work", {
+        fnType: "mutation",
+        fnHandle: "handle",
+        fnName: "A",
+        fnArgs: {},
+        attempts: 0,
+      });
+      // Stands in for a scheduler backlog: due, but not yet run.
+      const completionId = await ctx.scheduler.runAfter(
+        MINUTE,
+        internal.complete.complete,
+        {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "success", returnValue: null },
+              attempt: 0,
+            },
+          ],
+        },
+      );
+      await ctx.db.patch("work", workId, { completionId });
+      // The wrapper itself succeeded long ago.
+      const scheduledId = await ctx.scheduler.runAfter(
+        0,
+        internal.loop.updateRunStatus,
+        {},
+      );
+      return {
+        workId,
+        scheduledId,
+        completionId,
+        attempt: 0,
+        started: Date.now() - 10 * MINUTE,
+      };
+    });
+
+    await t.mutation(internal.recovery.recover, {
+      jobs: [
+        {
+          workId: job.workId,
+          scheduledId: job.scheduledId,
+          attempt: job.attempt,
+          started: job.started,
+        },
+      ],
+    });
+
+    const after = await t.run(async (ctx) => ({
+      work: await ctx.db.get("work", job.workId),
+      completions: (
+        await ctx.db.system.query("_scheduled_functions").collect()
+      ).filter((f) => f.name.includes("complete")),
+    }));
+    expect(after.work?.completionId).toBe(job.completionId);
+    expect(after.work?.completionReruns).toBeUndefined();
+    expect(after.completions).toHaveLength(1);
+  });
+});

@@ -49,6 +49,9 @@ export default defineSchema({
         workId: v.id("work"),
         scheduledId: v.id("_scheduled_functions"),
         started: v.number(),
+        // Not running: only waiting on a canceled job's completion, tracked
+        // so recovery can re-run it. Doesn't count toward maxParallelism.
+        completing: v.optional(v.boolean()),
       }),
     ),
   }),
@@ -68,6 +71,12 @@ export default defineSchema({
     canceled: v.optional(v.boolean()),
     // May point to a deleted entry after starting, or be absent on legacy work.
     pendingStartId: v.optional(v.id("pendingStart")),
+    // The scheduled `complete` for the current attempt, written in the same
+    // transaction that schedules it. Its stored args hold the result, so
+    // recovery can re-run a failed completion without re-running the work.
+    completionId: v.optional(v.id("_scheduled_functions")),
+    // How many times recovery has re-run this attempt's completion.
+    completionReruns: v.optional(v.number()),
   }),
 
   // Work waiting to start, one document per work item.

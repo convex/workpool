@@ -338,8 +338,11 @@ describe("state machine", () => {
           (p) => p.workId === workId,
         ) ?? null;
       const state = await ctx.db.query("internalState").unique();
+      // A `completing` entry only tracks a canceled job's completion; it
+      // doesn't hold a slot, so it isn't "running".
       const inRunning =
-        state?.running.some((r) => r.workId === workId) ?? false;
+        state?.running.some((r) => r.workId === workId && !r.completing) ??
+        false;
       const pc = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", workId))
@@ -556,12 +559,15 @@ describe("state machine", () => {
       expect(s.pendingCompletion.resultKind).toBe("failed");
     });
 
-    it("S2 running + complete(canceled) -> work deleted, NO pendingCompletion", async () => {
+    it("S2 running + complete(canceled) -> work deleted, pendingCompletion(canceled) releases its completing entry", async () => {
       const { workId } = await setupState(S2_RUNNING);
       await runComplete(workId, { kind: "canceled" }, 0);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
-      expect(s.pendingCompletion).toBe(false);
+      expect(s.pendingCompletion).toEqual({
+        retry: false,
+        resultKind: "canceled",
+      });
     });
 
     it("S12 canceled running + complete(success) -> work deleted (complete ignores canceled flag)", async () => {

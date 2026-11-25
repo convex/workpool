@@ -216,7 +216,7 @@ export const getBatch = internalQuery({
     return {
       kind: "idle" as const,
       cooldownMs:
-        running.length >= globals.maxParallelism
+        countRunning(running) >= globals.maxParallelism
           ? SATURATED_STATUS_COOLDOWN
           : STATUS_COOLDOWN,
       pollIntervalMs: COOLDOWN_CHECK_INTERVAL,
@@ -381,9 +381,9 @@ async function queryPending(
     .take(CANCELLATION_BATCH_SIZE);
   // Only completions for running jobs free slots, even if duplicated.
   const completed = new Set(completions.map((c) => c.workId));
-  const remainingRunning = running.filter(
-    (r) => !completed.has(r.workId),
-  ).length;
+  const remainingRunning = countRunning(
+    running.filter((r) => !completed.has(r.workId)),
+  );
   // Bound per-iteration writes. This is a capacity estimate: maxParallelism may
   // change before run, allowing temporary excess parallelism.
   const startLimit = Math.min(
@@ -489,9 +489,12 @@ async function handleCompletions(
 
       const running = state.running.find((r) => r.workId === c.workId);
       if (!running) {
-        console.error(
-          `[main] completing ${c.workId} but it's not in "running"`,
-        );
+        // Canceled work completed by an older version isn't tracked.
+        if (c.runResult.kind !== "canceled") {
+          console.error(
+            `[main] completing ${c.workId} but it's not in "running"`,
+          );
+        }
         return;
       }
       if (c.retry) {
@@ -523,9 +526,9 @@ async function handleCompletions(
     }),
   );
   // We do this after so the stats above know if it was in progress.
-  const before = state.running.length;
+  const before = countRunning(state.running);
   state.running = state.running.filter((r) => !completedWork.has(r.workId));
-  const numCompleted = before - state.running.length;
+  const numCompleted = before - countRunning(state.running);
   state.report.completed += numCompleted;
   console.debug(`[main] completed ${numCompleted} work`);
   return toCancel;
@@ -575,8 +578,44 @@ async function handleCancelation(
     }),
   );
   if (jobs.length) {
-    await ctx.scheduler.runAfter(0, internal.complete.complete, { jobs });
+    await scheduleCanceledCompletion(ctx, state, jobs);
   }
+}
+
+/**
+ * Schedule `complete` for canceled work that isn't running, and track it as a
+ * `completing` entry so recovery can re-run the completion if it fails.
+ */
+async function scheduleCanceledCompletion(
+  ctx: MutationCtx,
+  state: Doc<"internalState">,
+  jobs: CompleteJob[],
+) {
+  const scheduledId = await ctx.scheduler.runAfter(
+    0,
+    internal.complete.complete,
+    { jobs },
+  );
+  const started = Date.now();
+  for (const job of jobs) {
+    await ctx.db.patch("work", job.workId, {
+      completionId: scheduledId,
+      completionReruns: undefined,
+    });
+    state.running.push({
+      workId: job.workId,
+      scheduledId,
+      started,
+      completing: true,
+    });
+  }
+}
+
+/** Running entries that hold a slot: not just waiting on a completion. */
+function countRunning(running: Doc<"internalState">["running"]) {
+  let count = 0;
+  for (const r of running) if (!r.completing) count++;
+  return count;
 }
 
 async function handleRecovery(
@@ -610,7 +649,8 @@ async function handleRecovery(
           }
           return null;
         }
-        return { ...r, attempt: work.attempts };
+        const { workId, scheduledId, started } = r;
+        return { workId, scheduledId, started, attempt: work.attempts };
       }),
     )
   ).flatMap((r) => (r ? [r] : []));
@@ -668,15 +708,13 @@ async function handleStart(
       }
       console.debug(`[main] ${workId} was canceled (not starting)`);
       state.report.canceled++;
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult: { kind: "canceled" as const },
-            attempt: work.attempts,
-          },
-        ],
-      });
+      await scheduleCanceledCompletion(ctx, state, [
+        {
+          workId,
+          runResult: { kind: "canceled" as const },
+          attempt: work.attempts,
+        },
+      ]);
       continue;
     }
     if (work.pendingStartId === undefined) {
