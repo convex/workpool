@@ -17,6 +17,8 @@ import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
 import type * as loop from "../loop.js";
 import type * as migrations from "../migrations.js";
+import type * as pendingStart from "../pendingStart.js";
+import type * as pool from "../pool.js";
 import type * as recovery from "../recovery.js";
 import type * as shared from "../shared.js";
 import type * as stats from "../stats.js";
@@ -39,6 +41,8 @@ const fullApi: ApiFromModules<{
   logging: typeof logging;
   loop: typeof loop;
   migrations: typeof migrations;
+  pendingStart: typeof pendingStart;
+  pool: typeof pool;
   recovery: typeof recovery;
   shared: typeof shared;
   stats: typeof stats;

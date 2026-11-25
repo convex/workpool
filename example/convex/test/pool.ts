@@ -43,7 +43,7 @@ export function getComponent(kind: PoolKind) {
 }
 
 export function enqueueFor(kind: PoolKind): {
-  component: ComponentApi;
+  component: Pick<ComponentApi, "lib" | "config">;
   enqueueOne: typeof enqueue;
   enqueueMany: typeof enqueueBatch;
 } {

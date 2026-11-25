@@ -5,14 +5,10 @@ import {
   internalQuery,
   type MutationCtx,
 } from "./_generated/server.js";
-import {
-  type Config,
-  DEFAULT_MAX_PARALLELISM,
-  WORKER_NAME,
-  toTimestamp,
-} from "./shared.js";
+import { type Config, DEFAULT_MAX_PARALLELISM, toTimestamp } from "./shared.js";
 import { createLogger, type Logger, logLevel, shouldLog } from "./logging.js";
-import { components, internal } from "./_generated/api.js";
+import { getPoolStatus } from "./pool.js";
+import { internal } from "./_generated/api.js";
 import schema from "./schema.js";
 
 /**
@@ -200,16 +196,14 @@ export const diagnostics = internalQuery({
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
-    const runStatus = await ctx.runQuery(components.batchWorker.lib.status, {
-      name: WORKER_NAME,
-    });
+    const runStatus = await getPoolStatus(ctx);
     return {
       canceling: pendingCancelation,
       waiting: pendingStart,
       running: inProgressWork - pendingCompletion,
       completing: pendingCompletion,
       spareCapacity: maxParallelism - inProgressWork,
-      runStatus: runStatus?.kind,
+      runStatus,
     };
   },
 });

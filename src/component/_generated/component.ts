@@ -134,4 +134,15 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    pool: {
+      pause: FunctionReference<"mutation", "internal", {}, null, Name>;
+      resume: FunctionReference<"mutation", "internal", {}, null, Name>;
+      status: FunctionReference<
+        "query",
+        "internal",
+        {},
+        "idle" | "running" | "paused",
+        Name
+      >;
+    };
   };

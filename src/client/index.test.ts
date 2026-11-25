@@ -190,6 +190,120 @@ describe("completion callbacks through the client and scheduler", () => {
         .collect(),
     );
 
+  test("a cold pause holds enqueues and cancellations until explicit resume", async () => {
+    const status = () => t.query((ctx) => pool.poolStatus(ctx));
+    expect(await status()).toBe("idle");
+    await t.mutation((ctx) => pool.resume(ctx));
+    expect(await status()).toBe("idle");
+    await t.mutation((ctx) => pool.pause(ctx));
+    await t.mutation((ctx) => pool.pause(ctx));
+    const ids = await t.mutation((ctx) =>
+      pool.enqueueMutationBatch(
+        ctx,
+        refs.mutation,
+        [{ key: "keep" }, { key: "drop" }],
+        {
+          onComplete: refs.complete,
+          context: { key: "done" },
+          runAfter: 500,
+        },
+      ),
+    );
+    await t.mutation((ctx) => pool.cancel(ctx, ids[1]!));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await drain();
+    expect(await status()).toBe("paused");
+    expect(await events("keep")).toHaveLength(0);
+    expect(await events("drop")).toHaveLength(0);
+    expect(callback).not.toHaveBeenCalled();
+    expect(await t.query((ctx) => pool.status(ctx, ids[0]!))).toMatchObject({
+      state: "pending",
+    });
+
+    await t.mutation((ctx) => pool.resume(ctx));
+    await t.mutation((ctx) => pool.resume(ctx));
+    await drain();
+    expect(await events("keep")).toHaveLength(1);
+    expect(await events("drop")).toHaveLength(0);
+    const results = await events("done");
+    expect(results).toHaveLength(2);
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          workId: ids[0],
+          result: { kind: "success", returnValue: "mutation result" },
+        }),
+        expect.objectContaining({
+          workId: ids[1],
+          result: { kind: "canceled" },
+        }),
+      ]),
+    );
+    expect(await status()).toBe("idle");
+  });
+
+  test("pausing an idle pool suppresses its scheduled wakeup", async () => {
+    const key = "sleeping pool";
+    await t.mutation((ctx) =>
+      pool.enqueueMutation(ctx, refs.mutation, { key }, { runAfter: 60_000 }),
+    );
+    await vi.waitFor(
+      async () => {
+        expect(await t.query((ctx) => pool.poolStatus(ctx))).toBe("idle");
+      },
+      { timeout: 10_000 },
+    );
+    await t.mutation((ctx) => pool.pause(ctx));
+    await vi.advanceTimersByTimeAsync(120_000);
+    await drain();
+    expect(await events(key)).toHaveLength(0);
+    expect(await t.query((ctx) => pool.poolStatus(ctx))).toBe("paused");
+    await t.mutation((ctx) => pool.resume(ctx));
+    await drain();
+    expect(await events(key)).toHaveLength(1);
+  });
+
+  test("an in-flight attempt can finish while paused and retry after resume", async () => {
+    let release!: () => void;
+    actionGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const key = "pause in flight";
+    try {
+      await t.mutation((ctx) =>
+        pool.enqueueAction(
+          ctx,
+          refs.action,
+          { key, failures: 1 },
+          {
+            retry: retries,
+            onComplete: refs.complete,
+            context: { key },
+          },
+        ),
+      );
+      await vi.waitFor(async () => expect(await events(key)).toHaveLength(1), {
+        timeout: 10_000,
+      });
+      expect(await t.query((ctx) => pool.poolStatus(ctx))).toBe("running");
+      await t.mutation((ctx) => pool.pause(ctx));
+      release();
+      await drain();
+      expect(await events(key)).toHaveLength(1);
+      expect(await t.query((ctx) => pool.poolStatus(ctx))).toBe("paused");
+      await t.mutation((ctx) => pool.resume(ctx));
+      await drain();
+      expect((await events(key)).map((e) => e.kind)).toEqual([
+        "attempt",
+        "attempt",
+        "callback",
+      ]);
+      expect(callback).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+  });
+
   describe.each(excludeFilters.map((excludeKinds) => ({ excludeKinds })))(
     "exclude filter $excludeKinds",
     ({ excludeKinds }) => {
