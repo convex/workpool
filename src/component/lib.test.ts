@@ -8,9 +8,11 @@ import {
   it,
   vi,
 } from "vitest";
+import { getConvexSize, getDocumentSize } from "convex/values";
 import batchWorker from "@convex-dev/batch-worker/test";
 import { api } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
+import { MAX_DOCUMENT_SIZE } from "./payload.js";
 import schema from "./schema.js";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -110,6 +112,53 @@ describe("lib", () => {
         });
       },
     );
+
+    it("accepts args and context up to the backend's 1 MiB document limit together", async () => {
+      // layoutPayload puts both in one payload document once each is 8 KB or
+      // more. It used to check the pair against MAX_DOC_SIZE (1,000,000),
+      // rejecting pairs the backend would store; now it checks against
+      // MAX_DOCUMENT_SIZE, which convex-test also enforces on insert.
+      const fnArgs = { a: "x".repeat(500_000) };
+      // getDocumentSize of { args: null, context: null } with system fields.
+      const overhead = 78;
+      const contextLength =
+        MAX_DOCUMENT_SIZE -
+        overhead -
+        getConvexSize(fnArgs) -
+        getConvexSize("");
+      const item = {
+        fnHandle: "workHandle",
+        fnName: "work",
+        fnArgs,
+        fnType: "mutation" as const,
+        runAt: Date.now(),
+        config: {},
+      };
+      const id = await t.mutation(api.lib.enqueue, {
+        ...item,
+        onComplete: {
+          fnHandle: "callback",
+          context: "c".repeat(contextLength),
+        },
+      });
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get("work", id);
+        const payload = await ctx.db.get("payload", work!.payloadId!);
+        expect(getDocumentSize(payload!)).toBeLessThanOrEqual(
+          MAX_DOCUMENT_SIZE,
+        );
+        expect(work!.payloadSize).toBe(MAX_DOCUMENT_SIZE);
+      });
+      await expect(
+        t.mutation(api.lib.enqueue, {
+          ...item,
+          onComplete: {
+            fnHandle: "callback",
+            context: "c".repeat(contextLength + 1),
+          },
+        }),
+      ).rejects.toThrow(/too large together/);
+    });
 
     it("should successfully enqueue a work item", async () => {
       const id = await t.mutation(api.lib.enqueue, {

@@ -109,4 +109,99 @@ describe("continueWith", () => {
     expect(completions[0]).toMatchObject({ result: "failed" });
     expect(completions[0]!.error).toMatch(/too large/);
   });
+
+  test("keeps onComplete context when the next step doesn't fit with it", async () => {
+    // 600 KB args and 600 KB context each fit, but not in one payload doc.
+    // layoutPayload throws before continueWithArgs writes anything, so the
+    // old payload holding the context is still there for onComplete.
+    await t.mutation(api.test.continue.enqueueOversizedWithContext, {});
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const completions = await t.query(api.test.continue.completions, {});
+    expect(completions).toEqual([
+      expect.objectContaining({ result: "failed", contextLength: 600_000 }),
+    ]);
+    expect(completions[0]!.error).toMatch(/too large together/);
+  });
+
+  test.each([0, 20_000])(
+    "carries a large onComplete context across steps (args padding %i)",
+    async (paddingBytes) => {
+      await t.mutation(api.test.continue.enqueueSteps, {
+        end: 3,
+        delayMs: 0,
+        failFirst: false,
+        paddingBytes,
+        contextBytes: 20_000,
+      });
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect(await t.query(api.test.continue.steps, {})).toEqual([1, 2, 3]);
+      expect(await t.query(api.test.continue.completions, {})).toEqual([
+        { result: "success", value: 3, contextLength: 20_000 },
+      ]);
+    },
+  );
+
+  test("drops the next step if canceled while a step is running", async () => {
+    const id = await t.mutation(api.test.continue.enqueueSelfCanceling, {});
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+    expect(await t.query(api.test.continue.steps, {})).toEqual([1]);
+    expect(await t.query(api.test.continue.completions, {})).toEqual([
+      { result: "canceled" },
+    ]);
+  });
+
+  test("continues a query job", async () => {
+    await t.mutation(api.test.continue.enqueueCountQuery, {});
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.test.continue.completions, {})).toEqual([
+      { result: "success", value: 3 },
+    ]);
+  });
+
+  test("mixes RescheduleError and continueWith in one job", async () => {
+    // maxAttempts: 1 means any counted failure would end the job; neither
+    // reschedules nor steps use up that attempt.
+    await t.mutation(api.test.continue.enqueueMixed, { maxAttempts: 1 });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.query(api.test.continue.steps, {})).toEqual([1, 1, 2, 2]);
+    expect(await t.query(api.test.continue.completions, {})).toEqual([
+      { result: "success", value: 2 },
+    ]);
+  });
+
+  test.each([
+    { bytesArgs: false, label: "without args" },
+    // getContinuation used to accept any object here; complete's v.record
+    // validator then rejected the ArrayBuffer and the job stayed running.
+    { bytesArgs: true, label: "with ArrayBuffer args" },
+  ])("fails a job that returns the marker $label", async ({ bytesArgs }) => {
+    const id = await t.mutation(api.test.continue.enqueueBadMarker, {
+      bytesArgs,
+    });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const completions = await t.query(api.test.continue.completions, {});
+    expect(completions).toEqual([
+      expect.objectContaining({ result: "failed" }),
+    ]);
+    expect(completions[0]!.error).toMatch(/without an args object/);
+    // Not left in `running` by a rejected complete call.
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+  });
 });

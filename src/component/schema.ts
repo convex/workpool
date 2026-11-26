@@ -41,6 +41,7 @@ export default defineSchema({
       failed: v.number(), // failed after all retries
       retries: v.number(), // failure that turned into a retry
       rescheduled: v.optional(v.number()), // RescheduleError, not a failure
+      continued: v.optional(v.number()), // continueWith step, not a failure
       canceled: v.number(), // cancelations processed
       conflicted: v.optional(v.number()),
       lastReportTs: v.number(),
@@ -64,8 +65,9 @@ export default defineSchema({
     payloadId: v.optional(v.id("payload")),
     payloadSize: v.optional(v.number()),
     attempts: v.number(), // number of completed attempts
-    // Attempts that don't count toward retryBehavior.maxAttempts, such as
-    // ones that threw RescheduleError.
+    // Attempts that don't count toward retryBehavior.maxAttempts: ones that
+    // threw RescheduleError, and every attempt before the current
+    // continueWith step (continueWithArgs in complete.ts sets it to attempts).
     skippedAttempts: v.optional(v.number()),
     onComplete: v.optional(vOnCompleteFnContext),
     retryBehavior: v.optional(retryBehavior),
@@ -91,8 +93,12 @@ export default defineSchema({
     runResult: vResult,
     workId: v.id("work"),
     retry: v.boolean(),
-    // Set when the job asked to run again after this delay. Implies retry.
+    // Set when the job threw RescheduleError or returned continueWith, and
+    // should run again after this delay. Implies retry.
     rescheduleDelayMs: v.optional(v.number()),
+    // Set when rescheduleDelayMs came from continueWith, so handleCompletions
+    // in loop.ts counts it in report.continued instead of report.rescheduled.
+    continued: v.optional(v.boolean()),
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),

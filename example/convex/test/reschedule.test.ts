@@ -129,6 +129,54 @@ describe("RescheduleError", () => {
     ]);
   });
 
+  test("caps a huge delay, keeps the pool running, and can be canceled", async () => {
+    // Before the cap, this delay overflowed the int64 pendingStart.segment
+    // and every later loop run threw, so `other` below never ran. Canceling
+    // also clears that state, so `other` has to finish before the cancel.
+    const id = await t.mutation(api.test.reschedule.enqueueFlakyAction, {
+      reschedules: 1,
+      failures: 0,
+      delayMs: Number.MAX_SAFE_INTEGER,
+      maxAttempts: 3,
+    });
+    // The idle loop's wake-up at +4 years is past setTimeout's 2^31 ms
+    // limit, so under fake timers it fires at once and the loop spins while
+    // the job waits. Advancing in small steps keeps that spin short.
+    async function advance() {
+      for (let i = 0; i < 20; i++) {
+        await vi.advanceTimersByTimeAsync(10);
+        await t.finishInProgressScheduledFunctions();
+      }
+    }
+    await advance();
+    expect(await t.query(api.test.reschedule.attemptCount, {})).toBe(1);
+    // The reschedule didn't use up a retry.
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "pending",
+      previousAttempts: 0,
+    });
+
+    const other = await t.mutation(api.test.reschedule.enqueueFlakyAction, {
+      reschedules: 0,
+      failures: 0,
+      delayMs: 0,
+    });
+    await advance();
+    expect(await t.query(api.example.status, { id: other })).toEqual({
+      state: "finished",
+    });
+
+    await t.mutation(api.test.reschedule.cancel, { id });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
+    expect(await t.query(api.test.reschedule.completions, {})).toEqual([
+      "success",
+      "canceled",
+    ]);
+  });
+
   // Run the loop and the first attempt, but not the 10s reschedule delay.
   async function runFirstAttempt() {
     for (let i = 0; i < 3; i++) {

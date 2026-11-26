@@ -21,6 +21,7 @@ import {
   type LogLevel,
 } from "./logging.js";
 import {
+  clampDelayMs,
   type Config,
   countedAttempts,
   DEFAULT_MAX_PARALLELISM,
@@ -64,7 +65,10 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     succeeded: 0,
     failed: 0,
     retries: 0,
-    rescheduled: 0,
+    // No `rescheduled: 0` or `continued: 0` here: 0.5.0's report validator
+    // has neither field, so writing them would block a rollback even on pools
+    // that never used RescheduleError or continueWith. handleCompletions sets
+    // each on its first use.
     canceled: 0,
     lastReportTs: 0,
   },
@@ -79,6 +83,7 @@ const vCompletion = v.object({
   runResult: vResult,
   retry: v.boolean(),
   rescheduleDelayMs: v.optional(v.number()),
+  continued: v.optional(v.boolean()),
   segment: v.int64(),
 });
 type Completion = Infer<typeof vCompletion>;
@@ -190,6 +195,7 @@ export const getBatch = internalQuery({
           ...(c.rescheduleDelayMs !== undefined
             ? { rescheduleDelayMs: c.rescheduleDelayMs }
             : {}),
+          ...(c.continued ? { continued: true } : {}),
           segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
@@ -218,8 +224,12 @@ export const getBatch = internalQuery({
       const nextRecovery = lastRecovery + RECOVERY_PERIOD_NS;
       waits.push(fromTimestamp(nextRecovery) - Date.now());
     }
+    // clampDelayMs keeps the wake-up under the backend's 5-year runAfter
+    // limit. rescheduleJob caps new starts, but a pendingStart written before
+    // that cap existed (0.5.0 with a long retry backoff) can still be further
+    // out, and an over-limit timeoutMs makes batch-worker's runAfter throw.
     const timeoutMs =
-      waits.length > 0 ? Math.max(0, Math.min(...waits)) : undefined;
+      waits.length > 0 ? clampDelayMs(Math.min(...waits)) : undefined;
     return {
       kind: "idle" as const,
       cooldownMs:
@@ -319,7 +329,8 @@ export const run = internalMutation({
         succeeded: 0,
         failed: 0,
         retries: 0,
-        rescheduled: 0,
+        // Left out until nonzero so 0.5.0 can still read this document; see
+        // INITIAL_STATE.
         canceled: 0,
         lastReportTs,
       };
@@ -510,7 +521,10 @@ async function handleCompletions(
           return;
         }
         if (await rescheduleJob(ctx, work, console, c.rescheduleDelayMs)) {
-          if (c.rescheduleDelayMs !== undefined) {
+          if (c.continued) {
+            state.report.continued = (state.report.continued ?? 0) + 1;
+            recordCompleted(console, work, "continued", undefined);
+          } else if (c.rescheduleDelayMs !== undefined) {
             state.report.rescheduled = (state.report.rescheduled ?? 0) + 1;
             recordCompleted(console, work, "rescheduled", undefined);
           } else {
@@ -833,7 +847,11 @@ async function rescheduleJob(
   }
   // Date.now() is at least this mutation's snapshot, so retries cannot land
   // behind the incoming cursor, which is bounded by the query's snapshot.
-  const segment = toTimestamp(Date.now() + nextAttempt);
+  // clampDelayMs covers retry backoff and reschedule delays alike. With a
+  // one-minute initial backoff and base 2, the backoff passes the backend's
+  // 5-year runAfter limit around attempt 23 and overflows the int64 segment
+  // around attempt 28; with the default 250ms, around attempts 31 and 36.
+  const segment = toTimestamp(Date.now() + clampDelayMs(nextAttempt));
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,
