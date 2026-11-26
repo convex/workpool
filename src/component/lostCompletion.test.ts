@@ -1,7 +1,8 @@
 /**
- * Work whose scheduled `complete` fails must not hold its slot forever (#276).
- * Faults are injected by swapping the `complete` export in the module map, so
- * everything else runs exactly as in production.
+ * Work whose scheduled `complete` fails must not hold its slot forever (#276),
+ * and canceled work's completions must stay within maxParallelism. Faults are
+ * injected by swapping the `complete` export in the module map, so everything
+ * else runs exactly as in production.
  */
 import { createFunctionHandle, makeFunctionReference } from "convex/server";
 import { convexTest } from "convex-test";
@@ -10,11 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import batchWorker from "@convex-dev/batch-worker/test";
 import { api, internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, mutation } from "./_generated/server.js";
-import { MAX_COMPLETING } from "./loop.js";
+import {
+  internalMutation,
+  mutation,
+  type MutationCtx,
+} from "./_generated/server.js";
 import {
   findLegacyCompletion,
-  MAX_COMPLETION_RERUNS,
   RECOVERY_READ_BUDGET,
   type Reads,
 } from "./recovery.js";
@@ -30,6 +33,10 @@ const completeFaults = new Map<string, number>();
 let canceledCompleteFaults = 0;
 /** How many times the user function should throw before succeeding. */
 let userFailures = 0;
+/** The most running entries seen at the end of any main loop iteration. */
+let mostRunning = 0;
+/** The most jobs waiting in scheduled `complete` calls at the same point. */
+let mostCompleting = 0;
 
 function setup() {
   const t = convexTest(schema, {
@@ -60,6 +67,43 @@ function setup() {
               }
             }
             return actual.completeHandler(ctx, args as never);
+          },
+        }),
+      };
+    },
+    // Check the running list after every main loop iteration, not just
+    // between test steps.
+    "./loop.ts": async () => {
+      const actual = await import("./loop.js");
+      const run = (
+        actual.run as unknown as {
+          _handler: (ctx: MutationCtx, args: unknown) => Promise<null>;
+        }
+      )._handler;
+      return {
+        ...actual,
+        run: internalMutation({
+          handler: async (ctx, args: Record<string, unknown>) => {
+            const result = await run(ctx, args);
+            const state = await ctx.db.query("internalState").unique();
+            mostRunning = Math.max(mostRunning, state?.running.length ?? 0);
+            // Jobs whose scheduled `complete` hasn't committed yet: their
+            // work is still on the attempt the completion is for.
+            let completing = 0;
+            for await (const f of ctx.db.system.query("_scheduled_functions")) {
+              const waiting =
+                f.state.kind === "pending" || f.state.kind === "inProgress";
+              if (!waiting || !f.name.endsWith("complete")) continue;
+              const { jobs } = f.args[0] as {
+                jobs: { workId: Id<"work">; attempt: number }[];
+              };
+              for (const job of jobs) {
+                const work = await ctx.db.get("work", job.workId);
+                if (work?.attempts === job.attempt) completing++;
+              }
+            }
+            mostCompleting = Math.max(mostCompleting, completing);
+            return result;
           },
         }),
       };
@@ -135,18 +179,15 @@ async function internalState(t: T) {
 }
 
 /**
- * Advance simulated time, running whatever is due, and check after each step
- * that no more than maxParallelism entries hold a slot.
+ * Advance simulated time, running whatever is due, and check that no main
+ * loop iteration left more than maxParallelism jobs running or completing.
  */
 async function drive(t: T, ms: number) {
   for (let elapsed = 0; elapsed < ms; elapsed += 2 * SECOND) {
     vi.advanceTimersByTime(2 * SECOND);
     await t.finishInProgressScheduledFunctions();
-    const state = await internalState(t);
-    const holding = state?.running.filter((r) => !r.completing) ?? [];
-    expect(holding.length).toBeLessThanOrEqual(MAX_PARALLELISM);
-    const completing = state?.running.filter((r) => r.completing) ?? [];
-    expect(completing.length).toBeLessThanOrEqual(MAX_COMPLETING);
+    expect(mostRunning).toBeLessThanOrEqual(MAX_PARALLELISM);
+    expect(mostCompleting).toBeLessThanOrEqual(MAX_PARALLELISM);
   }
 }
 
@@ -159,6 +200,10 @@ async function expectFinished(t: T, ...ids: Id<"work">[]) {
   expect((await internalState(t))?.running).toEqual([]);
 }
 
+async function deadLetters(t: T) {
+  return t.query(internal.deadLetter.list, {});
+}
+
 describe("lost completion", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -167,97 +212,94 @@ describe("lost completion", () => {
     completeFaults.clear();
     canceledCompleteFaults = 0;
     userFailures = 0;
+    mostRunning = 0;
+    mostCompleting = 0;
   });
   afterEach(() => vi.useRealTimers());
 
-  it("re-runs a failed completion without re-running the mutation", async () => {
+  it("dead-letters a failed completion without re-running the mutation", async () => {
     const t = setup();
     const a = await enqueue(t, "A");
     completeFaults.set(a, 1);
     const b = await enqueue(t, "B");
 
-    await drive(t, 15 * MINUTE);
+    await drive(t, 10 * MINUTE);
 
+    // A committed once and isn't retried; B is no longer blocked.
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    await expectFinished(t, b);
+    const [letter, ...rest] = await deadLetters(t);
+    expect(rest).toEqual([]);
+    expect(letter).toMatchObject({
+      workId: a,
+      fnName: "A",
+      attempt: 0,
+      error: expect.any(String),
+      resultAvailable: true,
+    });
+
+    // Retrying it by hand runs its onComplete with the stored result.
+    await t.mutation(internal.deadLetter.retry, { id: letter!.id });
+    await drive(t, 10 * SECOND);
     expect(onCompleteRan.mock.calls).toEqual([
-      ["A", "success"],
       ["B", "success"],
+      ["A", "success"],
     ]);
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
     await expectFinished(t, a, b);
+    expect(await deadLetters(t)).toEqual([]);
   });
 
-  it("keeps the retry policy when a failure's completion is lost", async () => {
+  it("keeps the retry policy when a dead letter is retried", async () => {
     const t = setup();
     userFailures = 1;
     const a = await enqueue(t, "A", { maxAttempts: 3 });
     completeFaults.set(a, 1);
 
-    await drive(t, 15 * MINUTE);
+    await drive(t, 10 * MINUTE);
+    expect(userRan).toHaveBeenCalledTimes(1);
+    const [letter] = await deadLetters(t);
+    expect(letter).toMatchObject({ workId: a, resultAvailable: true });
 
     // The failed attempt's writes rolled back, so retrying it is safe.
+    await t.mutation(internal.deadLetter.retry, { id: letter!.id });
+    await drive(t, 10 * SECOND);
     expect(userRan).toHaveBeenCalledTimes(2);
     expect(onCompleteRan.mock.calls).toEqual([["A", "success"]]);
     await expectFinished(t, a);
+    expect(await deadLetters(t)).toEqual([]);
   });
 
-  it("gives up after repeated failures and frees the slot", async () => {
+  it("discards a dead letter without running its onComplete", async () => {
     const t = setup();
     const a = await enqueue(t, "A");
-    completeFaults.set(a, Infinity);
-    const b = await enqueue(t, "B");
-
-    await drive(t, 20 * MINUTE);
-
-    // A committed once and is never re-run; B is no longer blocked.
-    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
-    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
-    await expectFinished(t, b);
-    const work = await t.run((ctx) => ctx.db.get("work", a));
-    expect(work?.completionReruns).toBe(MAX_COMPLETION_RERUNS);
-  });
-
-  it("re-runs a failed completion for work canceled before it started", async () => {
-    const t = setup();
-    const a = await enqueue(t, "A", { runAt: Date.now() + 60 * MINUTE });
     completeFaults.set(a, 1);
-    await t.mutation(api.lib.cancel, { id: a, logLevel: "ERROR" });
-    const b = await enqueue(t, "B");
 
-    // A's lost completion doesn't take B's slot.
-    await drive(t, 10 * SECOND);
-    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
-    expect((await internalState(t))?.running).toMatchObject([
-      { workId: a, completing: true },
-    ]);
+    await drive(t, 10 * MINUTE);
+    const [letter] = await deadLetters(t);
+    await t.mutation(internal.deadLetter.discard, { id: letter!.id });
 
-    await drive(t, 15 * MINUTE);
-    expect(onCompleteRan.mock.calls).toEqual([
-      ["B", "success"],
-      ["A", "canceled"],
-    ]);
-    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
-    await expectFinished(t, a, b);
+    expect(onCompleteRan).not.toHaveBeenCalled();
+    await expectFinished(t, a);
+    expect(await deadLetters(t)).toEqual([]);
   });
 
-  it("bounds the running list when canceled work's completions fail", async () => {
+  it("holds a slot for each canceled job's completion", async () => {
     const t = setup();
     const h = await handles(t);
-    const N = 600;
-    for (let i = 0; i < N; i += 100) {
-      await t.mutation(api.lib.enqueueBatch, {
-        config,
-        items: Array.from({ length: 100 }, (_, j) => ({
-          fnHandle: h.work,
-          fnName: `F${i + j}`,
-          fnArgs: { name: `F${i + j}` },
-          fnType: "mutation" as const,
-          runAt: Date.now() + 60 * MINUTE,
-          onComplete: { fnHandle: h.onComplete, context: `F${i + j}` },
-        })),
-      });
-    }
-    // Enough failed batches to reach the limit before recovery runs.
-    canceledCompleteFaults = Math.ceil(MAX_COMPLETING / 64) + 2;
+    const N = 20;
+    await t.mutation(api.lib.enqueueBatch, {
+      config,
+      items: Array.from({ length: N }, (_, i) => ({
+        fnHandle: h.work,
+        fnName: `F${i}`,
+        fnArgs: { name: `F${i}` },
+        fnType: "mutation" as const,
+        runAt: Date.now() + 60 * MINUTE,
+        onComplete: { fnHandle: h.onComplete, context: `F${i}` },
+      })),
+    });
     await t.mutation(api.lib.cancelAll, {
       logLevel: "ERROR",
       limit: N,
@@ -265,29 +307,45 @@ describe("lost completion", () => {
     });
     const b = await enqueue(t, "B");
 
-    // Cancelations wait while the running list is full of completing work,
-    // and B isn't blocked by them.
-    await drive(t, 10 * SECOND);
-    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
-    const state = await internalState(t);
-    expect(state?.running.length).toBe(MAX_COMPLETING);
-    // Completing work isn't reported as running or as using capacity.
-    expect(await t.query(internal.stats.diagnostics, {})).toMatchObject({
-      running: 0,
-      spareCapacity: MAX_PARALLELISM,
-    });
-    expect(await t.query(internal.stats.running, {})).toEqual([]);
-
-    await drive(t, 30 * MINUTE);
-    const canceled = onCompleteRan.mock.calls.filter(
-      ([, kind]) => kind === "canceled",
-    );
-    expect(canceled).toHaveLength(N);
+    // Their canceled onCompletes run well before their runAt, but never more
+    // than maxParallelism at a time.
+    await drive(t, 2 * MINUTE);
+    const kinds = onCompleteRan.mock.calls.map(([, kind]) => kind);
+    expect(kinds.filter((k) => k === "canceled")).toHaveLength(N);
+    expect(onCompleteRan.mock.calls).toContainEqual(["B", "success"]);
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
     await expectFinished(t, b);
   });
 
-  it("recovers a mutation whose completion was lost before completionId existed", async () => {
+  it("dead-letters a canceled job whose completion failed, freeing its slot", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A", { runAt: Date.now() + 60 * MINUTE });
+    canceledCompleteFaults = 1;
+    await t.mutation(api.lib.cancel, { id: a, logLevel: "ERROR" });
+    await drive(t, 10 * SECOND);
+    const b = await enqueue(t, "B");
+
+    // A's canceled completion holds the slot until recovery finds it failed.
+    await drive(t, MINUTE);
+    expect(userRan).not.toHaveBeenCalled();
+    expect((await internalState(t))?.running).toMatchObject([{ workId: a }]);
+
+    await drive(t, 10 * MINUTE);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    await expectFinished(t, b);
+    const [letter] = await deadLetters(t);
+    expect(letter).toMatchObject({ workId: a, resultAvailable: true });
+
+    await t.mutation(internal.deadLetter.retry, { id: letter!.id });
+    await drive(t, 10 * SECOND);
+    expect(onCompleteRan.mock.calls).toEqual([
+      ["B", "success"],
+      ["A", "canceled"],
+    ]);
+    await expectFinished(t, a, b);
+  });
+
+  it("dead-letters a mutation whose completion was lost before completionId existed", async () => {
     const t = setup();
     const a = await enqueue(t, "A");
     completeFaults.set(a, 1);
@@ -296,21 +354,47 @@ describe("lost completion", () => {
     // A's wrapper succeeds and its `complete` fails. Clearing completionId
     // leaves A as an older `runMutationWrapper` left it.
     await drive(t, 10 * SECOND);
-    await t.run(async (ctx) => {
+    const completionId = await t.run(async (ctx) => {
       const work = await ctx.db.get("work", a);
       expect(work?.completionId).toBeDefined();
       await ctx.db.patch("work", a, { completionId: undefined });
+      return work!.completionId;
     });
     expect(onCompleteRan).not.toHaveBeenCalled();
 
-    await drive(t, 15 * MINUTE);
+    await drive(t, 10 * MINUTE);
 
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
-    expect(onCompleteRan.mock.calls).toEqual([
-      ["A", "success"],
-      ["B", "success"],
-    ]);
-    await expectFinished(t, a, b);
+    expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
+    await expectFinished(t, b);
+    // Recovery found the lost completion, so the result can be retried.
+    const [letter] = await deadLetters(t);
+    expect(letter).toMatchObject({ workId: a, resultAvailable: true });
+    const stored = await t.run((ctx) => ctx.db.get("deadLetter", letter!.id));
+    expect(stored?.completionId).toBe(completionId);
+  });
+
+  it("can't retry a dead letter whose result is gone", async () => {
+    const t = setup();
+    const id = await t.run(async (ctx) => {
+      const workId = await ctx.db.insert("work", {
+        fnType: "mutation",
+        fnHandle: "handle",
+        fnName: "A",
+        fnArgs: {},
+        attempts: 0,
+      });
+      return ctx.db.insert("deadLetter", {
+        workId,
+        attempt: 0,
+        error: "completion not found",
+      });
+    });
+    expect(await deadLetters(t)).toMatchObject([{ resultAvailable: false }]);
+    await expect(t.mutation(internal.deadLetter.retry, { id })).rejects.toThrow(
+      /no longer available/,
+    );
+    expect(await deadLetters(t)).toHaveLength(1);
   });
 
   it("passes jobs to another recover call past the read budget", async () => {
@@ -359,21 +443,16 @@ describe("lost completion", () => {
     });
 
     const after = await t.run(async (ctx) => ({
-      works: await Promise.all(
-        ids.map(({ workId }) => ctx.db.get("work", workId)),
+      deadLetters: (await ctx.db.query("deadLetter").collect()).map(
+        (d) => d.workId,
       ),
       recovers: (await ctx.db.system.query("_scheduled_functions").collect())
         .filter((f) => f.name.includes("recover") && f.state.kind === "pending")
         .map((f) => (f.args[0] as { jobs: { workId: string }[] }).jobs),
     }));
-    // The first three fill the budget and are re-run here; the fourth waits
-    // for the next recover call.
-    expect(after.works.map((w) => w?.completionReruns)).toEqual([
-      1,
-      1,
-      1,
-      undefined,
-    ]);
+    // The first three fill the budget and are dead-lettered here; the fourth
+    // waits for the next recover call.
+    expect(after.deadLetters).toEqual(ids.slice(0, 3).map((i) => i.workId));
     expect(after.recovers).toEqual([
       [expect.objectContaining({ workId: ids[3]!.workId })],
     ]);
@@ -516,12 +595,13 @@ describe("lost completion", () => {
 
     const after = await t.run(async (ctx) => ({
       work: await ctx.db.get("work", job.workId),
+      deadLetters: await ctx.db.query("deadLetter").collect(),
       completions: (
         await ctx.db.system.query("_scheduled_functions").collect()
       ).filter((f) => f.name.includes("complete")),
     }));
     expect(after.work?.completionId).toBe(job.completionId);
-    expect(after.work?.completionReruns).toBeUndefined();
+    expect(after.deadLetters).toEqual([]);
     expect(after.completions).toHaveLength(1);
   });
 });

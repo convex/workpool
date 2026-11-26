@@ -32,19 +32,10 @@ import {
   toTimestamp,
   vResult,
 } from "./shared.js";
-import {
-  countRunning,
-  generateReport,
-  recordCompleted,
-  recordStarted,
-} from "./stats.js";
+import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
 
-export const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
-// Canceled work waiting on its completion stays in `running` (as `completing`)
-// until the loop sees that completion. Stop taking cancelations past this many
-// so a mass cancel can't grow the running list without bound.
-export const MAX_COMPLETING = 4 * CANCELLATION_BATCH_SIZE;
+const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
 const RECOVERY_BATCH_SIZE = 32;
 const START_BATCH_SIZE = 32;
 // Bound per-iteration work to keep loop latency low.
@@ -225,7 +216,7 @@ export const getBatch = internalQuery({
     return {
       kind: "idle" as const,
       cooldownMs:
-        countRunning(running) >= globals.maxParallelism
+        running.length >= globals.maxParallelism
           ? SATURATED_STATUS_COOLDOWN
           : STATUS_COOLDOWN,
       pollIntervalMs: COOLDOWN_CHECK_INTERVAL,
@@ -269,17 +260,12 @@ export const run = internalMutation({
 
     const compLabel = `[main] pendingCompletion(${batch.completions.length})`;
     console.time(compLabel);
-    const toCancel = await handleCompletions(
-      ctx,
-      state,
-      batch.completions,
-      console,
-    );
+    await handleCompletions(ctx, state, batch.completions, console);
     console.timeEnd(compLabel);
 
     const cancLabel = `[main] pendingCancelation(${batch.cancelations.length})`;
     console.time(cancLabel);
-    await handleCancelation(ctx, state, batch.cancelations, console, toCancel);
+    await handleCancelation(ctx, batch.cancelations, console);
     console.timeEnd(cancLabel);
 
     if (state.running.length === 0) {
@@ -380,39 +366,29 @@ async function queryPending(
     running: Doc<"internalState">["running"];
   },
 ) {
-  // Not capped at maxParallelism: canceled work's completions hold no slot.
   const completions = await ctx.db
     .query("pendingCompletion")
     .withIndex("segment", (q) => q.gte("segment", completionCursor))
-    .take(MAIN_BATCH_SIZE);
-  const completing = running.length - countRunning(running);
-  const cancelLimit = Math.min(
-    CANCELLATION_BATCH_SIZE,
-    Math.max(0, MAX_COMPLETING - completing),
-  );
-  const cancelations =
-    cancelLimit > 0
-      ? await ctx.db
-          .query("pendingCancelation")
-          .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
-          .take(cancelLimit)
-      : [];
+    .take(Math.min(maxParallelism, MAIN_BATCH_SIZE));
+  const cancelations = await ctx.db
+    .query("pendingCancelation")
+    .withIndex("segment", (q) => q.gte("segment", cancelationCursor))
+    .take(CANCELLATION_BATCH_SIZE);
   // Only completions for running jobs free slots, even if duplicated.
   const completed = new Set(completions.map((c) => c.workId));
-  const remainingRunning = countRunning(
-    running.filter((r) => !completed.has(r.workId)),
-  );
+  const remainingRunning = running.filter(
+    (r) => !completed.has(r.workId),
+  ).length;
   // Bound per-iteration writes. This is a capacity estimate: maxParallelism may
   // change before run, allowing temporary excess parallelism.
   const startLimit = Math.min(
     MAIN_BATCH_SIZE,
     Math.max(0, maxParallelism - remainingRunning),
   );
-  // Exclude starts whose work is completing or canceling in this batch.
-  const excluded = new Set([
-    ...completed,
-    ...cancelations.map((c) => c.workId),
-  ]);
+  // Exclude starts whose work is completing in this batch. Starts for work
+  // being canceled are selected as usual: handleStart completes them as
+  // canceled, holding the slot for that completion.
+  const excluded = completed;
 
   // Rescue scheduled entries that committed behind the incoming cursor.
   // The scanTs index orders enqueues by commit time, then by segment.
@@ -496,9 +472,9 @@ async function handleCompletions(
   completed: Completion[],
   console: Logger,
 ) {
-  // Completions that were going to be retried but have since been canceled.
-  const toCancel: CompleteJob[] = [];
   const completedWork = new Set<Id<"work">>();
+  // Canceled work's completions free a slot, but aren't completed work.
+  const canceledWork = new Set<Id<"work">>();
   await Promise.all(
     completed.map(async (c) => {
       await ctx.db.delete("pendingCompletion", c.pendingId);
@@ -506,13 +482,21 @@ async function handleCompletions(
       completedWork.add(c.workId);
 
       const running = state.running.find((r) => r.workId === c.workId);
-      if (!running) {
+      if (!running && c.retry) {
+        // A dead letter retried by hand holds no slot, but still needs its
+        // retry scheduled.
+        console.warn(`[main] retrying ${c.workId}, which isn't in "running"`);
+      } else if (!running) {
         // Canceled work completed by an older version isn't tracked.
         if (c.runResult.kind !== "canceled") {
           console.error(
             `[main] completing ${c.workId} but it's not in "running"`,
           );
         }
+        return;
+      }
+      if (c.runResult.kind === "canceled") {
+        canceledWork.add(c.workId);
         return;
       }
       if (c.retry) {
@@ -527,12 +511,7 @@ async function handleCompletions(
           recordCompleted(console, work, "retrying", undefined);
         } else {
           // We don't retry if it's been canceled in the mean time.
-          state.report.canceled++;
-          toCancel.push({
-            workId: c.workId,
-            runResult: { kind: "canceled" },
-            attempt: work.attempts,
-          });
+          await queueCanceled(ctx, work);
         }
       } else {
         if (c.runResult.kind === "success") {
@@ -544,12 +523,11 @@ async function handleCompletions(
     }),
   );
   // We do this after so the stats above know if it was in progress.
-  const before = countRunning(state.running);
+  const before = state.running.length;
   state.running = state.running.filter((r) => !completedWork.has(r.workId));
-  const numCompleted = before - countRunning(state.running);
+  const numCompleted = before - state.running.length - canceledWork.size;
   state.report.completed += numCompleted;
   console.debug(`[main] completed ${numCompleted} work`);
-  return toCancel;
 }
 
 /**
@@ -557,16 +535,13 @@ async function handleCompletions(
  */
 async function handleCancelation(
   ctx: MutationCtx,
-  state: Doc<"internalState">,
   canceled: Cancelation[],
   console: Logger,
-  toCancel: CompleteJob[],
 ) {
   if (canceled.length) {
     console.debug(`[main] attempting to cancel ${canceled.length}`);
   }
   const canceledWork = new Set<Id<"work">>();
-  const jobs: CompleteJob[] = [...toCancel];
   await Promise.all(
     canceled.map(async ({ pendingId, workId }) => {
       await ctx.db.delete("pendingCancelation", pendingId);
@@ -584,25 +559,36 @@ async function handleCancelation(
       if (!work.canceled) {
         await ctx.db.patch("work", workId, { canceled: true });
       }
+      // Work that hasn't started is completed as canceled when it would have
+      // started, so its completion holds a slot. Don't wait for a later runAt.
       const pendingStart = await findPendingStart(ctx, work);
-      if (!pendingStart) return;
-      await ctx.db.delete("pendingStart", pendingStart._id);
-      state.report.canceled++;
-      jobs.push({
-        workId,
-        runResult: { kind: "canceled" },
-        attempt: work.attempts,
-      });
+      if (
+        pendingStart &&
+        (pendingStart.segment as bigint) > toTimestamp(Date.now())
+      ) {
+        await ctx.db.delete("pendingStart", pendingStart._id);
+        await insertPendingStart(ctx, work, Date.now());
+      }
     }),
   );
-  if (jobs.length) {
-    await scheduleCanceledCompletion(ctx, state, jobs);
+}
+
+/**
+ * Canceled work that isn't running is completed by handleStart, so its
+ * completion takes a slot like any other job. Queue it to start now.
+ */
+async function queueCanceled(ctx: MutationCtx, work: Doc<"work">) {
+  if (!work.canceled) {
+    await ctx.db.patch("work", work._id, { canceled: true });
+  }
+  if (!(await findPendingStart(ctx, work))) {
+    await insertPendingStart(ctx, work, Date.now());
   }
 }
 
 /**
- * Schedule `complete` for canceled work that isn't running, and track it as a
- * `completing` entry so recovery can re-run the completion if it fails.
+ * Schedule `complete` for canceled work and hold a slot for each job until
+ * its completion is handled, recording the completion for recovery.
  */
 async function scheduleCanceledCompletion(
   ctx: MutationCtx,
@@ -616,16 +602,8 @@ async function scheduleCanceledCompletion(
   );
   const started = Date.now();
   for (const job of jobs) {
-    await ctx.db.patch("work", job.workId, {
-      completionId: scheduledId,
-      completionReruns: undefined,
-    });
-    state.running.push({
-      workId: job.workId,
-      scheduledId,
-      started,
-      completing: true,
-    });
+    await ctx.db.patch("work", job.workId, { completionId: scheduledId });
+    state.running.push({ workId: job.workId, scheduledId, started });
   }
 }
 
@@ -660,8 +638,7 @@ async function handleRecovery(
           }
           return null;
         }
-        const { workId, scheduledId, started } = r;
-        return { workId, scheduledId, started, attempt: work.attempts };
+        return { ...r, attempt: work.attempts };
       }),
     )
   ).flatMap((r) => (r ? [r] : []));
@@ -695,6 +672,7 @@ async function handleStart(
     }),
   );
   const starts: { work: Doc<"work">; lagMs: number }[] = [];
+  const canceled: CompleteJob[] = [];
   for (const {
     pendingId,
     workId,
@@ -719,13 +697,11 @@ async function handleStart(
       }
       console.debug(`[main] ${workId} was canceled (not starting)`);
       state.report.canceled++;
-      await scheduleCanceledCompletion(ctx, state, [
-        {
-          workId,
-          runResult: { kind: "canceled" as const },
-          attempt: work.attempts,
-        },
-      ]);
+      canceled.push({
+        workId,
+        runResult: { kind: "canceled" },
+        attempt: work.attempts,
+      });
       continue;
     }
     if (work.pendingStartId === undefined) {
@@ -737,6 +713,9 @@ async function handleStart(
     });
   }
 
+  if (canceled.length) {
+    await scheduleCanceledCompletion(ctx, state, canceled);
+  }
   state.running.push(...(await beginWorkBatch(ctx, starts, console, logLevel)));
 }
 
@@ -858,16 +837,23 @@ async function rescheduleJob(
   const backoffMs =
     work.retryBehavior.initialBackoffMs *
     Math.pow(work.retryBehavior.base, work.attempts - 1);
-  const nextAttempt = withJitter(backoffMs);
-  // Date.now() is at least this mutation's snapshot, so retries cannot land
-  // behind the incoming cursor, which is bounded by the query's snapshot.
-  const segment = toTimestamp(Date.now() + nextAttempt);
+  await insertPendingStart(ctx, work, Date.now() + withJitter(backoffMs));
+  return true;
+}
+
+/** Queue work to start at `runAt`, from the main loop. */
+async function insertPendingStart(
+  ctx: MutationCtx,
+  work: Doc<"work">,
+  runAt: number,
+) {
+  // Date.now() is at least this mutation's snapshot, so these entries cannot
+  // land behind the incoming cursor, which is bounded by the query's snapshot.
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
-    segment,
+    segment: toTimestamp(runAt),
   });
   await ctx.db.patch("work", work._id, { pendingStartId });
-  return true;
 }
 
 export function withJitter(delay: number) {

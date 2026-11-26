@@ -91,13 +91,13 @@ export async function generateReport(
   if (pendingStart.isDone) {
     recordReport(console, {
       ...state.report,
-      running: countRunning(state.running),
+      running: state.running.length,
       backlog: pendingStart.page.length,
     });
   } else {
     await ctx.scheduler.runAfter(0, internal.stats.calculateBacklogAndReport, {
       report: state.report,
-      running: countRunning(state.running),
+      running: state.running.length,
       logLevel,
     });
   }
@@ -142,16 +142,6 @@ function recordReport(
   });
 }
 
-/** Running entries that hold a slot: not just waiting on a completion. */
-function slotHolders(running: Doc<"internalState">["running"]) {
-  return running.filter((r) => !r.completing);
-}
-
-/** The number of running entries that hold a slot. */
-export function countRunning(running: Doc<"internalState">["running"]) {
-  return slotHolders(running).length;
-}
-
 /**
  * Returns the currently running work items with summary details.
  * Warning: this should not be used from a mutation, as it will cause conflicts.
@@ -174,18 +164,16 @@ export const running = internalQuery({
       .first();
     if (!internalState) return [];
     return Promise.all(
-      slotHolders(internalState.running).map(
-        async ({ workId, scheduledId, started }) => {
-          const work = await ctx.db.get("work", workId);
-          return {
-            workId,
-            scheduledId,
-            fnName: work?.fnName ?? "<unknown>",
-            started,
-            attempts: work?.attempts ?? 0,
-          };
-        },
-      ),
+      internalState.running.map(async ({ workId, scheduledId, started }) => {
+        const work = await ctx.db.get("work", workId);
+        return {
+          workId,
+          scheduledId,
+          fnName: work?.fnName ?? "<unknown>",
+          started,
+          attempts: work?.attempts ?? 0,
+        };
+      }),
     );
   },
 });
@@ -203,27 +191,12 @@ export const diagnostics = internalQuery({
       .query("internalState")
       .order("desc")
       .first();
-    const running = internalState?.running ?? [];
-    const inProgressWork = countRunning(running);
+    const inProgressWork = internalState?.running.length ?? 0;
     const maxParallelism = global?.maxParallelism ?? DEFAULT_MAX_PARALLELISM;
     const pendingStart = await (ctx.db.query("pendingStart") as any).count();
     const pendingCompletion = await (
       ctx.db.query("pendingCompletion") as any
     ).count();
-    // Canceled work's completions hold no slot, so don't subtract them from
-    // the running work. There are at most a few hundred of these.
-    const canceledCompletions = (
-      await Promise.all(
-        running
-          .filter((r) => r.completing)
-          .map((r) =>
-            ctx.db
-              .query("pendingCompletion")
-              .withIndex("workId", (q) => q.eq("workId", r.workId))
-              .first(),
-          ),
-      )
-    ).filter((c) => c !== null).length;
     const pendingCancelation = await (
       ctx.db.query("pendingCancelation") as any
     ).count();
@@ -233,7 +206,7 @@ export const diagnostics = internalQuery({
     return {
       canceling: pendingCancelation,
       waiting: pendingStart,
-      running: inProgressWork - (pendingCompletion - canceledCompletions),
+      running: inProgressWork - pendingCompletion,
       completing: pendingCompletion,
       spareCapacity: maxParallelism - inProgressWork,
       runStatus: runStatus?.kind,

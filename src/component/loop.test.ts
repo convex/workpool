@@ -153,12 +153,8 @@ describe("loop", () => {
       const pendingCancelation = await ctx.db
         .query("pendingCancelation")
         .collect();
-      const entries = state?.running ?? [];
       return {
-        // Entries holding a slot. `completing` entries only track a canceled
-        // job's completion.
-        running: entries.filter((r) => !r.completing),
-        completing: entries.filter((r) => r.completing),
+        running: state?.running ?? [],
         segmentCursors: state?.segmentCursors,
         lastRecovery: state?.lastRecovery ?? 0n,
         pendingStart,
@@ -229,7 +225,9 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingCompletion).toHaveLength(0);
       expect(o.pendingCancelation).toHaveLength(0);
-      expect(o.pendingStart.map((p) => p.workId)).toEqual([canceledId]);
+      // The canceled work's start was selected too, and dropped once its work
+      // was found missing.
+      expect(o.pendingStart).toHaveLength(0);
       // Consume the events and retire the completed attempt, without retrying
       // missing work or scheduling a cancellation callback for it.
       expect(o.running).toHaveLength(0);
@@ -276,7 +274,8 @@ describe("loop", () => {
 
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
-      expect(o.running).toHaveLength(0);
+      // Its canceled completion holds the slot the start would have used.
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
       expect(await t.query((ctx) => ctx.db.get("work", workId))).toMatchObject({
         canceled: true,
       });
@@ -299,9 +298,17 @@ describe("loop", () => {
       const batch = await getWorkBatch();
       await t.mutation(api.lib.cancel, { id: workId });
       await t.mutation(internal.loop.run, batch);
-      const o = await observe();
-      expect(o.pendingStart).toHaveLength(0);
+      let o = await observe();
+      // Not retried: queued to be completed as canceled, holding a slot.
+      expect(o.pendingStart.map((p) => p.workId)).toEqual([workId]);
       expect(o.running).toHaveLength(0);
+      await runLoop();
+      o = await observe();
+      expect(o.pendingStart).toHaveLength(0);
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
+      expect(await t.query((ctx) => ctx.db.get("work", workId))).toMatchObject({
+        attempts: 1,
+      });
     });
   });
 
@@ -644,7 +651,10 @@ describe("loop", () => {
       await runLoop();
       await runLoop();
       const o = await observe();
-      expect(o.running.map((r) => r.workId)).toEqual([readyId]);
+      // The canceled entry holds a slot for its canceled completion.
+      expect(o.running.map((r) => r.workId).sort()).toEqual(
+        [readyId, canceledId].sort(),
+      );
       expect(o.pendingCompletion).toHaveLength(0);
       expect(o.pendingCancelation).toHaveLength(0);
       expect(o.pendingStart).toHaveLength(1);
@@ -778,10 +788,17 @@ describe("loop", () => {
       await runLoop();
 
       await t.mutation(api.lib.cancel, { id: workId });
+      await runLoop(); // moves its start to now
+      let o = await observe();
+      expect(o.pendingStart.map((p) => p.workId)).toEqual([workId]);
+      expect(fromTimestamp(o.pendingStart[0].segment as bigint)).toBeLessThan(
+        runAt,
+      );
       await runLoop();
-      const o = await observe();
+      o = await observe();
       expect(o.pendingStart).toHaveLength(0);
-      expect(o.running).toHaveLength(0);
+      // Completed as canceled, holding a slot until that completion lands.
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
   });
 
@@ -913,11 +930,12 @@ describe("loop", () => {
 
       const o = await observe();
       // Loop's direct effect: no retry was queued, work is marked canceled.
-      // (A follow-up `complete` mutation is scheduled to finalize the work
-      // doc deletion — that's complete.ts's responsibility, not the loop's.)
-      expect(o.pendingStart).toHaveLength(0);
+      // It's queued to start now, where it's completed as canceled.
+      expect(o.pendingStart.map((p) => p.workId)).toEqual([workId]);
+      expect(o.running).toHaveLength(0);
       const work = await t.run(async (ctx) => ctx.db.get("work", workId));
       expect(work?.canceled).toBe(true);
+      expect(work?.attempts).toBe(1);
     });
   });
 
@@ -936,7 +954,8 @@ describe("loop", () => {
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
       expect(o.pendingCancelation).toHaveLength(0);
-      expect(o.running).toHaveLength(0);
+      // Completed as canceled, holding a slot until that completion lands.
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
     });
 
     it("removes a pendingStart cancellation before the work runs", async () => {
@@ -948,7 +967,8 @@ describe("loop", () => {
 
       const o = await observe();
       expect(o.pendingStart).toHaveLength(0);
-      expect(o.running).toHaveLength(0);
+      // Its canceled completion holds a slot until it lands.
+      expect(o.running.map((r) => r.workId)).toEqual([workId]);
       // Work is marked canceled by the loop. Final deletion happens when
       // the scheduled `complete` mutation runs (separate concern).
       const work = await t.run(async (ctx) => ctx.db.get("work", workId));

@@ -49,9 +49,6 @@ export default defineSchema({
         workId: v.id("work"),
         scheduledId: v.id("_scheduled_functions"),
         started: v.number(),
-        // Not running: only waiting on a canceled job's completion, tracked
-        // so recovery can re-run it. Doesn't count toward maxParallelism.
-        completing: v.optional(v.boolean()),
       }),
     ),
   }),
@@ -72,11 +69,9 @@ export default defineSchema({
     // May point to a deleted entry after starting, or be absent on legacy work.
     pendingStartId: v.optional(v.id("pendingStart")),
     // The scheduled `complete` for the current attempt, written in the same
-    // transaction that schedules it. Its stored args hold the result, so
-    // recovery can re-run a failed completion without re-running the work.
+    // transaction that schedules it. Recovery checks it instead of the work,
+    // and its stored args hold the result if it has to be retried by hand.
     completionId: v.optional(v.id("_scheduled_functions")),
-    // How many times recovery has re-run this attempt's completion.
-    completionReruns: v.optional(v.number()),
   }),
 
   // Work waiting to start, one document per work item.
@@ -107,6 +102,17 @@ export default defineSchema({
   })
     .index("workId", ["workId"])
     .index("segment", ["segment"]),
+
+  // Work whose completion failed. Its slot is freed and its onComplete hasn't
+  // run; the work stays until it's retried or discarded (see deadLetter.ts).
+  deadLetter: defineTable({
+    workId: v.id("work"),
+    attempt: v.number(),
+    // The failed `complete`. Its args hold the work's result while the
+    // scheduler keeps the record. Absent if the record was already gone.
+    completionId: v.optional(v.id("_scheduled_functions")),
+    error: v.string(),
+  }).index("workId", ["workId"]),
 
   // Store large data separately to avoid document size limits
   payload: defineTable({

@@ -114,7 +114,6 @@ export async function completeHandler(
       await ctx.db.patch("work", work._id, {
         attempts: work.attempts,
         completionId: undefined,
-        completionReruns: undefined,
       });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
@@ -204,8 +203,7 @@ export async function completeHandler(
         // This is the terminating state for work.
         await ctx.db.delete("work", job.workId);
       }
-      // Canceled work isn't running, but the loop tracks its completion as a
-      // `completing` entry in running, which this releases.
+      // Canceled work's completion holds a slot too, which this releases.
       pendingCompletions.push({
         runResult: stripResult(job.runResult),
         workId: job.workId,

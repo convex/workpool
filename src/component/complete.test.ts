@@ -382,7 +382,7 @@ describe("complete", () => {
         expect(work).toBeNull();
       });
 
-      // A canceled completion tells the loop to release its completing entry.
+      // A canceled completion releases the slot its completion held.
       await t.run(async (ctx) => {
         const pendingCompletions = await ctx.db
           .query("pendingCompletion")

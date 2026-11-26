@@ -7,9 +7,6 @@ import { createLogger, type Logger } from "./logging.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
 import { kickMainLoop } from "./kick.js";
 
-// Re-run a failed completion this many times before giving up on it.
-export const MAX_COMPLETION_RERUNS = 5;
-
 /**
  * How many bytes of `_scheduled_functions` docs one `recover` call reads
  * before passing its remaining jobs to a new `recover` call. A completion's
@@ -46,7 +43,7 @@ const recoveryArgs = v.object({
  * the user cancels scheduled jobs (from the dashboard).
  * Possible states it could be in at the moment this executes:
  * - the work committed and scheduled its completion (work.completionId):
- *   -> wait for the completion, or re-run it if it failed.
+ *   -> wait for the completion, or dead-letter the work if it failed.
  * - in internalState.running and complete was never called
  *   -> we should call completeHandler with failure.
  * - complete already called, no action needed (only possible for actions):
@@ -180,9 +177,9 @@ export async function recoveryHandler(
         }
         if (legacy === null) {
           console.error(
-            `${preamble} succeeded but its completion is gone; freeing its slot`,
+            `${preamble} succeeded but its completion is gone; dead-lettering it`,
           );
-          await giveUp(ctx, work._id, "Completion failed: not found");
+          await deadLetter(ctx, work, undefined, "completion not found");
           freed = true;
           break;
         }
@@ -216,10 +213,10 @@ export async function recoveryHandler(
 
 /**
  * Handle work whose completion was scheduled. A pending completion may just
- * be behind a scheduler backlog, so it's left alone. A failed or canceled one
- * is re-run from its stored args: `complete` is guarded by the attempt
- * number, so running it again is safe. Returns true if it gave up and freed
- * the slot directly.
+ * be behind a scheduler backlog, so it's left alone. Otherwise the completion
+ * failed (or finished without completing the work): the work goes to the
+ * dead-letter queue, to be retried or discarded by hand. Returns true if it
+ * freed the slot.
  */
 async function recoverCompletion(
   ctx: MutationCtx,
@@ -230,59 +227,47 @@ async function recoverCompletion(
   preamble: string,
 ): Promise<boolean> {
   const completion = await readScheduled(ctx, reads, completionId);
-  const state = completion?.state.kind;
-  if (state === "pending" || state === "inProgress") {
-    console.debug(`${preamble} completion ${completionId} is ${state}`);
+  const state = completion?.state;
+  if (state?.kind === "pending" || state?.kind === "inProgress") {
+    console.debug(`${preamble} completion ${completionId} is ${state.kind}`);
     return false;
   }
-  const reruns = work.completionReruns ?? 0;
-  const job = (
-    completion?.args[0] as { jobs?: CompleteJob[] } | undefined
-  )?.jobs?.find((j) => j.workId === work._id && j.attempt === work.attempts);
   const error =
-    completion?.state.kind === "failed" ? completion.state.error : state;
-  if (job && reruns < MAX_COMPLETION_RERUNS) {
-    console.warn(
-      `${preamble} completion ${completionId} ${state ?? "not found"}` +
-        ` (${error}), re-running (${reruns + 1}/${MAX_COMPLETION_RERUNS})`,
-    );
-    const rerunId = await ctx.scheduler.runAfter(
-      0,
-      internal.complete.complete,
-      { jobs: [job] },
-    );
-    await ctx.db.patch("work", work._id, {
-      completionId: rerunId,
-      completionReruns: reruns + 1,
-    });
-    return false;
-  }
-  // The result is gone (the scheduler record was cleaned up) or completing
-  // keeps failing. Free the slot so the pool keeps moving, but leave the
-  // work in place: its onComplete hasn't run.
-  // TODO: dead letter queue, and a status for work stuck here.
+    state === undefined
+      ? "completion not found"
+      : state.kind === "failed"
+        ? (state.error ?? "completion failed")
+        : state.kind === "success"
+          ? "completion succeeded without completing the work"
+          : `completion ${state.kind}`;
   console.error(
-    `${preamble} giving up on completion ${completionId} after ${reruns}` +
-      ` re-runs (${completion ? error : "not found"}); freeing its slot`,
+    `${preamble} completion ${completionId} failed (${error}); dead-lettering it`,
   );
-  await giveUp(
-    ctx,
-    work._id,
-    `Completion failed: ${completion ? error : "not found"}`,
-  );
+  await deadLetter(ctx, work, completion ? completionId : undefined, error);
   return true;
 }
 
 /**
- * Frees the work's slot without running its onComplete: the main loop
- * removes it from `running` when it handles this pendingCompletion, and the
- * work doc stays in place.
+ * Puts work whose completion failed in the dead-letter queue and frees its
+ * slot without running its onComplete: the main loop removes it from
+ * `running` when it handles this pendingCompletion. The work doc stays.
  */
-async function giveUp(ctx: MutationCtx, workId: Id<"work">, error: string) {
+async function deadLetter(
+  ctx: MutationCtx,
+  work: Doc<"work">,
+  completionId: Id<"_scheduled_functions"> | undefined,
+  error: string,
+) {
+  await ctx.db.insert("deadLetter", {
+    workId: work._id,
+    attempt: work.attempts,
+    completionId,
+    error,
+  });
   await ctx.db.insert("pendingCompletion", {
     segment: ctx.db.vars.commitTs,
-    workId,
-    runResult: { kind: "failed", error },
+    workId: work._id,
+    runResult: { kind: "failed", error: `Completion failed: ${error}` },
     retry: false,
   });
 }

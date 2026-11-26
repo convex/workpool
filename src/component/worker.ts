@@ -77,14 +77,11 @@ export const runMutationWrapper = internalMutation({
       internal.complete.complete,
       { jobs: [job] },
     );
-    // Record the completion with the committed work. If it fails, recovery
-    // re-runs it from its stored args instead of re-running the work.
+    // Record the completion with the committed work, so recovery checks the
+    // completion instead of the work, which isn't safe to run again.
     const work = await ctx.db.get("work", workId);
     if (work?.attempts === attempt) {
-      await ctx.db.patch("work", workId, {
-        completionId,
-        completionReruns: undefined,
-      });
+      await ctx.db.patch("work", workId, { completionId });
     }
   },
 });
