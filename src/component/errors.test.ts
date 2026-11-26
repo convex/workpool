@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConvexError } from "convex/values";
+import { MAX_SCHEDULE_AHEAD_MS } from "./shared.js";
 import {
   getReschedule,
   getNonRetryableErrorMessage,
@@ -91,25 +92,48 @@ describe("errors", () => {
 
   describe("RescheduleError", () => {
     it("carries its delay in ConvexError data", () => {
-      const error = new RescheduleError({ delayMs: 5000 });
-      expect(getReschedule(error)).toEqual({ delayMs: 5000 });
+      const error = new RescheduleError({ delayMs: 5000, message: "busy" });
+      expect(getReschedule(error)).toEqual({ delayMs: 5000, message: "busy" });
       expect(isNonRetryableError(error)).toBe(false);
     });
 
     it("defaults to no delay", () => {
-      expect(getReschedule(new RescheduleError())).toEqual({ delayMs: 0 });
+      expect(getReschedule(new RescheduleError())).toEqual({
+        delayMs: 0,
+        message: "Rescheduled",
+      });
     });
 
     it("is identified after crossing a function boundary", () => {
       // Only ConvexError data survives ctx.runAction / ctx.runMutation.
       const data = new RescheduleError({ delayMs: 10 }).data;
-      expect(getReschedule(new ConvexError(data))).toEqual({ delayMs: 10 });
+      expect(getReschedule(new ConvexError(data))).toEqual({
+        delayMs: 10,
+        message: "Rescheduled",
+      });
     });
 
     it("ignores other errors", () => {
       expect(isRescheduleError(new Error("nope"))).toBe(false);
       expect(isRescheduleError(new ConvexError({ delayMs: 10 }))).toBe(false);
       expect(isRescheduleError(new NonRetryableError("nope"))).toBe(false);
+    });
+
+    it("caps huge delays at the enqueue bound", () => {
+      const error = new RescheduleError({ delayMs: Number.MAX_SAFE_INTEGER });
+      expect(error.data.delayMs).toBe(MAX_SCHEDULE_AHEAD_MS);
+      expect(getReschedule(error)?.delayMs).toBe(MAX_SCHEDULE_AHEAD_MS);
+    });
+
+    it("caps huge delays in hand-built error data", () => {
+      // Data built without the constructor skips its clamp.
+      const data = {
+        ...new RescheduleError().data,
+        delayMs: Number.MAX_SAFE_INTEGER,
+      };
+      expect(getReschedule(new ConvexError(data))?.delayMs).toBe(
+        MAX_SCHEDULE_AHEAD_MS,
+      );
     });
 
     it("rejects invalid delays", () => {
