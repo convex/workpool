@@ -1035,10 +1035,11 @@ describe("loop", () => {
       });
     });
 
-    it("caps a retry backoff that comes out NaN", async () => {
+    it("retries at once when a zero retry backoff comes out NaN", async () => {
       await initialize();
       // 0 * Math.pow(2, 1100) is 0 * Infinity, which is NaN; BigInt(NaN) in
-      // toTimestamp would throw inside the loop on every run.
+      // toTimestamp would throw inside the loop on every run. clampDelayMs
+      // maps it to 0, the wait that initialBackoffMs: 0 asks for.
       const workId = await enqueueWork({
         retryBehavior: { maxAttempts: 2000, initialBackoffMs: 0, base: 2 },
       });
@@ -1047,12 +1048,12 @@ describe("loop", () => {
       await simulateCompletion(workId, { kind: "failed", error: "boom" }, 1100);
       await runLoop();
       expect(fromTimestamp(await onlyStartSegment())).toBeLessThanOrEqual(
-        Date.now() + MAX_SCHEDULE_AHEAD_MS + SECOND,
+        Date.now() + SECOND,
       );
     });
 
-    it("clampDelayMs maps NaN to the cap and negatives to 0", () => {
-      expect(clampDelayMs(NaN)).toBe(MAX_SCHEDULE_AHEAD_MS);
+    it("clampDelayMs maps NaN and negatives to 0", () => {
+      expect(clampDelayMs(NaN)).toBe(0);
       expect(clampDelayMs(-Number.MAX_VALUE)).toBe(0);
       expect(clampDelayMs(Infinity)).toBe(MAX_SCHEDULE_AHEAD_MS);
       expect(clampDelayMs(1234)).toBe(1234);

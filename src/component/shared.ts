@@ -210,12 +210,13 @@ export const MAX_SCHEDULE_AHEAD_MS = 4 * YEAR;
  * Caps a delay at `MAX_SCHEDULE_AHEAD_MS`. Without it, a huge delay such as
  * `Number.MAX_SAFE_INTEGER` overflows the int64 `pendingStart.segment` that
  * `rescheduleJob` writes, and every later loop run throws on that insert.
- * NaN also maps to the cap: retry backoff `0 * Math.pow(base, n)` becomes
- * `0 * Infinity` after about 1,024 attempts, and `BigInt(NaN)` in
- * `toTimestamp` would throw. A negative delay maps to 0.
+ * NaN maps to 0: its only source is retry backoff with `initialBackoffMs: 0`,
+ * where `0 * Math.pow(base, n)` becomes `0 * Infinity` after about 1,024
+ * attempts. The intended wait there is 0, and `BigInt(NaN)` in `toTimestamp`
+ * would throw. A negative delay also maps to 0.
  */
 export function clampDelayMs(delayMs: number): number {
-  if (Number.isNaN(delayMs)) return MAX_SCHEDULE_AHEAD_MS;
+  if (Number.isNaN(delayMs)) return 0;
   return Math.max(0, Math.min(delayMs, MAX_SCHEDULE_AHEAD_MS));
 }
 

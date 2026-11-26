@@ -147,9 +147,11 @@ function recordReport(
   const permanentFailureRate = withoutRetries ? failed / withoutRetries : 0;
   console.event("report", {
     ...report,
-    // internalState.report omits `rescheduled` until it's nonzero so pools
-    // can roll back to 0.5.0; log 0 so log queries always see the field.
+    // internalState.report omits `rescheduled` and `continued` until they're
+    // nonzero so pools can roll back to 0.5.0; log 0 so log queries always
+    // see both fields.
     rescheduled: report.rescheduled ?? 0,
+    continued: report.continued ?? 0,
     failureRate: Number(failureRate.toFixed(4)),
     permanentFailureRate: Number(permanentFailureRate.toFixed(4)),
   });
