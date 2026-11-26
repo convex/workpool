@@ -24,7 +24,7 @@ export const RECOVERY_READ_BUDGET = 4_000_000;
  * Before completionId existed, `runMutationWrapper` scheduled `complete`
  * without recording it. That `complete` was created while the wrapper ran,
  * so `findLegacyCompletion` looks for it among scheduled functions created
- * in this window before the wrapper's `completedTime`, scanning at most
+ * in this window before the wrapper's `completedTime`, checking at most
  * LEGACY_SCAN_LIMIT of them.
  */
 const LEGACY_SEARCH_WINDOW_MS = 60_000;
@@ -73,16 +73,19 @@ export async function recoveryHandler(
   const completionJobs: CompleteJob[] = [];
   let freed = false;
   const reads: Reads = { bytes: 0, docs: new Map() };
-  for (let i = 0; i < jobs.length; i++) {
+  const deferFrom = async (i: number) => {
+    console.warn(
+      `[recovery] read ${reads.bytes} bytes; passing ${jobs.length - i}` +
+        ` jobs to another recover call`,
+    );
+    await ctx.scheduler.runAfter(0, internal.recovery.recover, {
+      jobs: jobs.slice(i),
+    });
+  };
+  jobLoop: for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     if (i > 0 && reads.bytes >= RECOVERY_READ_BUDGET) {
-      console.warn(
-        `[recovery] read ${reads.bytes} bytes; passing ${jobs.length - i}` +
-          ` jobs to another recover call`,
-      );
-      await ctx.scheduler.runAfter(0, internal.recovery.recover, {
-        jobs: jobs.slice(i),
-      });
+      await deferFrom(i);
       break;
     }
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
@@ -162,10 +165,16 @@ export async function recoveryHandler(
         // Work started before completionId existed, whose `complete` was
         // lost (#276). Find that `complete` so its result isn't lost too.
         const legacy = await findLegacyCompletion(ctx, reads, scheduled, job);
-        if (legacy === "truncated") {
+        if (legacy === "overBudget" && i > 0) {
+          // The search reached the read budget partway: redo this job and
+          // the rest in a new recover call, which starts with nothing read.
+          await deferFrom(i);
+          break jobLoop;
+        }
+        if (legacy === "truncated" || legacy === "overBudget") {
           console.warn(
             `${preamble} succeeded but its completion wasn't among the` +
-              ` ${LEGACY_SCAN_LIMIT} scheduled functions checked, skipping`,
+              ` scheduled functions checked (${legacy}), skipping`,
           );
           break;
         }
@@ -281,7 +290,7 @@ async function giveUp(ctx: MutationCtx, workId: Id<"work">, error: string) {
 type ScheduledDoc = SystemDataModel["_scheduled_functions"]["document"];
 
 /** Scheduled function docs this `recover` call has read, and their size. */
-type Reads = {
+export type Reads = {
   bytes: number;
   docs: Map<Id<"_scheduled_functions">, ScheduledDoc | null>;
 };
@@ -308,50 +317,61 @@ async function readScheduled(
 
 /**
  * Finds the `complete` a pre-completionId `runMutationWrapper` scheduled for
- * this attempt. Returns its id, null if it's not in the search window (the
- * scheduler deletes finished records after a while), or "truncated" if the
- * window held more than LEGACY_SCAN_LIMIT scheduled functions, so the answer
+ * this attempt. Returns its id, or null if it's not in the search window (the
+ * scheduler deletes finished records after a while). Returns "truncated"
+ * after checking LEGACY_SCAN_LIMIT records without a match, and "overBudget"
+ * once `reads.bytes` reaches RECOVERY_READ_BUDGET; in both cases the answer
  * isn't known.
  */
-async function findLegacyCompletion(
+// only exported for testing
+export async function findLegacyCompletion(
   ctx: MutationCtx,
   reads: Reads,
   wrapper: ScheduledDoc,
   job: { workId: Id<"work">; attempt: number },
-): Promise<Id<"_scheduled_functions"> | null | "truncated"> {
+): Promise<Id<"_scheduled_functions"> | null | "truncated" | "overBudget"> {
   // `complete` was created while the wrapper ran: after its scheduledTime
-  // and before its completedTime, which is set as it commits. The extra
-  // second covers clock differences. When completedTime isn't recorded,
-  // search forward from scheduledTime instead.
+  // and just before its completedTime, which is set as it commits. So the
+  // search reads newest first from completedTime, plus a second for clock
+  // differences, and usually matches within the first few records. When
+  // completedTime isn't recorded, it reads forward from scheduledTime.
+  const completedTime = wrapper.completedTime;
   const start =
-    wrapper.completedTime === undefined
+    completedTime === undefined
       ? wrapper.scheduledTime
       : Math.max(
           wrapper.scheduledTime,
-          wrapper.completedTime - LEGACY_SEARCH_WINDOW_MS,
+          completedTime - LEGACY_SEARCH_WINDOW_MS,
         );
   const end =
-    (wrapper.completedTime ?? wrapper.scheduledTime + LEGACY_SEARCH_WINDOW_MS) +
-    1000;
-  const candidates = await ctx.db.system
+    (completedTime ?? wrapper.scheduledTime + LEGACY_SEARCH_WINDOW_MS) + 1000;
+  const candidates = ctx.db.system
     .query("_scheduled_functions")
     .withIndex("by_creation_time", (q) =>
       q.gte("_creationTime", start).lte("_creationTime", end),
     )
-    .take(LEGACY_SCAN_LIMIT + 1);
-  for (const candidate of candidates.slice(0, LEGACY_SCAN_LIMIT)) {
+    .order(completedTime === undefined ? "asc" : "desc");
+  // Iterating fetches records as the loop reaches them, so each one read is
+  // counted in reads.bytes before the next is fetched.
+  let checked = 0;
+  for await (const candidate of candidates) {
     reads.bytes += getConvexSize(candidate);
-    if (!candidate.name.endsWith("complete")) {
-      continue;
-    }
-    const jobs = (candidate.args[0] as { jobs?: CompleteJob[] } | undefined)
-      ?.jobs;
+    checked++;
+    const jobs = candidate.name.endsWith("complete")
+      ? (candidate.args[0] as { jobs?: CompleteJob[] } | undefined)?.jobs
+      : undefined;
     if (
       jobs?.some((j) => j.workId === job.workId && j.attempt === job.attempt)
     ) {
       reads.docs.set(candidate._id, candidate);
       return candidate._id;
     }
+    if (reads.bytes >= RECOVERY_READ_BUDGET) {
+      return "overBudget";
+    }
+    if (checked >= LEGACY_SCAN_LIMIT) {
+      return "truncated";
+    }
   }
-  return candidates.length > LEGACY_SCAN_LIMIT ? "truncated" : null;
+  return null;
 }

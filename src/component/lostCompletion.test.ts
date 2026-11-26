@@ -12,7 +12,12 @@ import { api, internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation } from "./_generated/server.js";
 import { MAX_COMPLETING } from "./loop.js";
-import { MAX_COMPLETION_RERUNS, RECOVERY_READ_BUDGET } from "./recovery.js";
+import {
+  findLegacyCompletion,
+  MAX_COMPLETION_RERUNS,
+  RECOVERY_READ_BUDGET,
+  type Reads,
+} from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
 import { MINUTE, SECOND, vResult } from "./shared.js";
@@ -372,6 +377,90 @@ describe("lost completion", () => {
     expect(after.recovers).toEqual([
       [expect.objectContaining({ workId: ids[3]!.workId })],
     ]);
+  });
+
+  it("finds a legacy completion behind many older scheduled functions", async () => {
+    const t = setup();
+    const found = await t.run(async (ctx) => {
+      const scheduledTime = Date.now();
+      // Unrelated records created earlier in the window than the `complete`.
+      for (let i = 0; i < 600; i++) {
+        await ctx.scheduler.runAfter(MINUTE, internal.loop.updateRunStatus, {});
+      }
+      const workId = await ctx.db.insert("work", {
+        fnType: "mutation",
+        fnHandle: "handle",
+        fnName: "A",
+        fnArgs: {},
+        attempts: 0,
+      });
+      const completionId = await ctx.scheduler.runAfter(
+        MINUTE,
+        internal.complete.complete,
+        {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "success", returnValue: null },
+              attempt: 0,
+            },
+          ],
+        },
+      );
+      const reads: Reads = { bytes: 0, docs: new Map() };
+      // Stands in for the wrapper's record, which the real scheduler marks
+      // with completedTime as the wrapper commits.
+      const wrapper = {
+        scheduledTime,
+        completedTime: Date.now(),
+      } as Parameters<typeof findLegacyCompletion>[2];
+      const result = await findLegacyCompletion(ctx, reads, wrapper, {
+        workId,
+        attempt: 0,
+      });
+      return { result, completionId };
+    });
+    expect(found.result).toBe(found.completionId);
+  });
+
+  it("stops a legacy search at the read budget", async () => {
+    const t = setup();
+    const { result, bytes } = await t.run(async (ctx) => {
+      const scheduledTime = Date.now();
+      const big = "x".repeat(Math.ceil(RECOVERY_READ_BUDGET / 4));
+      const workId = await ctx.db.insert("work", {
+        fnType: "mutation",
+        fnHandle: "handle",
+        fnName: "A",
+        fnArgs: {},
+        attempts: 0,
+      });
+      // Large records with no matching `complete` among them.
+      for (let i = 0; i < 10; i++) {
+        await ctx.scheduler.runAfter(MINUTE, internal.complete.complete, {
+          jobs: [
+            {
+              workId,
+              runResult: { kind: "success", returnValue: big },
+              attempt: 1,
+            },
+          ],
+        });
+      }
+      const reads: Reads = { bytes: 0, docs: new Map() };
+      const wrapper = {
+        scheduledTime,
+        completedTime: Date.now(),
+      } as Parameters<typeof findLegacyCompletion>[2];
+      const result = await findLegacyCompletion(ctx, reads, wrapper, {
+        workId,
+        attempt: 0,
+      });
+      return { result, bytes: reads.bytes };
+    });
+    expect(result).toBe("overBudget");
+    // It read up to the budget, not all ten records.
+    expect(bytes).toBeLessThan(RECOVERY_READ_BUDGET * 1.5);
   });
 
   it("waits on a completion that's still pending in the scheduler", async () => {
