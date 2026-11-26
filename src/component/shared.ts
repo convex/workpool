@@ -103,6 +103,14 @@ export const DEFAULT_RETRY_BEHAVIOR: RetryBehavior = {
   initialBackoffMs: 250,
   base: 2,
 };
+/** Attempts that count toward retryBehavior.maxAttempts. */
+export function countedAttempts(work: {
+  attempts: number;
+  skippedAttempts?: number;
+}) {
+  return work.attempts - (work.skippedAttempts ?? 0);
+}
+
 // This ensures that the type satisfies the schema.
 void ({} as RetryBehavior satisfies Infer<typeof retryBehavior>);
 
