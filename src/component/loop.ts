@@ -221,8 +221,12 @@ export const getBatch = internalQuery({
       const nextRecovery = lastRecovery + RECOVERY_PERIOD_NS;
       waits.push(fromTimestamp(nextRecovery) - Date.now());
     }
+    // clampDelayMs keeps the wake-up under the backend's 5-year runAfter
+    // limit. rescheduleJob caps new starts, but a pendingStart written before
+    // that cap existed (0.5.0 with a long retry backoff) can still be further
+    // out, and an over-limit timeoutMs makes batch-worker's runAfter throw.
     const timeoutMs =
-      waits.length > 0 ? Math.max(0, Math.min(...waits)) : undefined;
+      waits.length > 0 ? clampDelayMs(Math.min(...waits)) : undefined;
     return {
       kind: "idle" as const,
       cooldownMs:
@@ -837,9 +841,10 @@ async function rescheduleJob(
   }
   // Date.now() is at least this mutation's snapshot, so retries cannot land
   // behind the incoming cursor, which is bounded by the query's snapshot.
-  // clampDelayMs covers retry backoff and reschedule delays alike: a long
-  // exponential backoff reaches the backend's 5-year runAfter limit around
-  // attempt 23 and overflows the int64 segment around attempt 30.
+  // clampDelayMs covers retry backoff and reschedule delays alike. With a
+  // one-minute initial backoff and base 2, the backoff passes the backend's
+  // 5-year runAfter limit around attempt 23 and overflows the int64 segment
+  // around attempt 28; with the default 250ms, around attempts 31 and 36.
   const segment = toTimestamp(Date.now() + clampDelayMs(nextAttempt));
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,

@@ -121,7 +121,10 @@ export type RescheduleOptions = {
  * The job stays pending in the meantime, so `onComplete` isn't called until
  * a later attempt finishes. Rescheduling isn't bounded by
  * `retry.maxAttempts`: a job that keeps throwing this keeps running, so stop
- * it yourself, e.g. by counting attempts in your own table or canceling it. If the job is canceled before it runs again, it
+ * it yourself by canceling it, or in an action by counting runs in your own
+ * table with `ctx.runMutation` before throwing. A mutation or query job can't
+ * keep such a count, because throwing rolls back the mutation's writes and a
+ * query can't write. If the job is canceled before it runs again, it
  * won't run again and `onComplete` is called with `kind: "canceled"`.
  *
  * In a mutation, throwing rolls back that mutation's writes, as with any
