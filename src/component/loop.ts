@@ -45,11 +45,11 @@ export const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unboun
 // until the loop sees that completion. Stop taking cancelations past this many
 // so a mass cancel can't grow the running list without bound.
 export const MAX_COMPLETING = 4 * CANCELLATION_BATCH_SIZE;
-const RECOVERY_BATCH_SIZE = 32;
+export const RECOVERY_BATCH_SIZE = 32;
 const START_BATCH_SIZE = 32;
 // Bound per-iteration work to keep loop latency low.
 const MAIN_BATCH_SIZE = 64;
-const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+export const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_NS = toTimestamp(MINUTE); // how often to check.
 // Keep an idle loop warm briefly to avoid status churn under light traffic.
 export const STATUS_COOLDOWN = 2 * SECOND;

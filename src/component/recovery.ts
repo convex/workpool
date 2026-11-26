@@ -1,31 +1,38 @@
 import { getConvexSize, type Infer, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
-import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from "./_generated/server.js";
 import type { SystemDataModel } from "convex/server";
 import { createLogger, type Logger } from "./logging.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
 import { kickMainLoop } from "./kick.js";
+import { RECOVERY_BATCH_SIZE, RECOVERY_THRESHOLD_MS } from "./loop.js";
 
 // Re-run a failed completion this many times before giving up on it.
 export const MAX_COMPLETION_RERUNS = 5;
 
 /**
  * How many bytes of `_scheduled_functions` docs one `recover` call reads
- * before passing its remaining jobs to a new `recover` call. A completion's
- * args hold return values, up to about 2MB per batch (`MAX_BATCH_SIZE` in
- * complete.ts), so 32 of them could pass the transaction read limit. A
- * `recover` that fails that way rolls back, and `handleRecovery` in loop.ts
- * would build the same batch again every minute.
+ * before it stops; `handleRecovery` in loop.ts sends the jobs it didn't reach
+ * again on its next pass, a minute later. A completion's args hold return
+ * values, up to about 2MB per batch (`MAX_BATCH_SIZE` in complete.ts), so 32
+ * of them could pass the transaction read limit. A `recover` that fails that
+ * way rolls back, and `handleRecovery` would build the same batch again every
+ * minute.
  */
 export const RECOVERY_READ_BUDGET = 4_000_000;
 
 /**
  * Before completionId existed, `runMutationWrapper` scheduled `complete`
  * without recording it. That `complete` was created while the wrapper ran,
- * so `findLegacyCompletion` looks for it among scheduled functions created
- * in this window before the wrapper's `completedTime`, checking at most
- * LEGACY_SCAN_LIMIT of them.
+ * so `findLegacyCompletion` (used only by `recoverLegacyCompletions`) looks
+ * for it among scheduled functions created in this window before the
+ * wrapper's `completedTime`, checking at most LEGACY_SCAN_LIMIT of them.
  */
 const LEGACY_SEARCH_WINDOW_MS = 60_000;
 const LEGACY_SCAN_LIMIT = 500;
@@ -73,19 +80,15 @@ export async function recoveryHandler(
   const completionJobs: CompleteJob[] = [];
   let freed = false;
   const reads: Reads = { bytes: 0, docs: new Map() };
-  const deferFrom = async (i: number) => {
-    console.warn(
-      `[recovery] read ${reads.bytes} bytes; passing ${jobs.length - i}` +
-        ` jobs to another recover call`,
-    );
-    await ctx.scheduler.runAfter(0, internal.recovery.recover, {
-      jobs: jobs.slice(i),
-    });
-  };
-  jobLoop: for (let i = 0; i < jobs.length; i++) {
+  for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     if (i > 0 && reads.bytes >= RECOVERY_READ_BUDGET) {
-      await deferFrom(i);
+      // Stopping here, not scheduling another recover, keeps one recover
+      // per batch: `handleRecovery` sends these jobs again in a minute.
+      console.warn(
+        `[recovery] read ${reads.bytes} bytes; leaving ${jobs.length - i}` +
+          ` jobs for the next recovery pass`,
+      );
       break;
     }
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
@@ -156,54 +159,6 @@ export async function recoveryHandler(
         });
         break;
       }
-      case "success": {
-        // Only a mutation or query wrapper schedules its own completion; an
-        // action's completion is handled by `completeInline` in worker.ts.
-        if (!scheduled.name.endsWith("runMutationWrapper")) {
-          break;
-        }
-        // Work started before completionId existed, whose `complete` was
-        // lost (#276). Find that `complete` so its result isn't lost too.
-        const legacy = await findLegacyCompletion(ctx, reads, scheduled, job);
-        if (legacy === "overBudget" && i > 0) {
-          // The search reached the read budget partway: redo this job and
-          // the rest in a new recover call, which starts with nothing read.
-          await deferFrom(i);
-          break jobLoop;
-        }
-        if (legacy === "truncated" || legacy === "overBudget") {
-          console.warn(
-            `${preamble} succeeded but its completion wasn't among the` +
-              ` scheduled functions checked (${legacy}), skipping`,
-          );
-          break;
-        }
-        if (legacy === null) {
-          console.error(
-            `${preamble} succeeded but its completion is gone; freeing its slot`,
-          );
-          await giveUp(ctx, work._id, "Completion failed: not found");
-          freed = true;
-          break;
-        }
-        console.warn(
-          `${preamble} succeeded before completionId was recorded; tracking` +
-            ` its completion ${legacy}`,
-        );
-        await ctx.db.patch("work", work._id, { completionId: legacy });
-        const lost = await recoverCompletion(
-          ctx,
-          console,
-          reads,
-          work,
-          legacy,
-          preamble,
-        );
-        if (lost) {
-          freed = true;
-        }
-        break;
-      }
     }
   }
   if (freed) {
@@ -213,6 +168,171 @@ export async function recoveryHandler(
     await completeHandler(ctx, { jobs: completionJobs });
   }
 }
+
+const legacyResult = v.object({
+  /** Stuck jobs whose `complete` was found and re-run or is still pending. */
+  recovered: v.number(),
+  /** Stuck jobs whose `complete` record is gone; their slots were freed. */
+  freed: v.number(),
+  /** Jobs left as they were, with the reason, e.g. "tooRecent". */
+  skipped: v.array(v.object({ workId: v.id("work"), reason: v.string() })),
+});
+
+/**
+ * One-off repair for pools stuck by #276 before completionId existed: a
+ * mutation's `runMutationWrapper` succeeded, but the `complete` it scheduled
+ * failed, so the job holds its slot and `recover` skips it. Run it once after
+ * upgrading:
+ *
+ *   npx convex run --component workpool recovery:recoverLegacyCompletions
+ *
+ * It lists the stuck jobs with `legacyCandidates`, a query, so it doesn't
+ * conflict with the main loop's writes to internalState. Then it calls
+ * `recoverLegacy` on them in batches, one after another, never more than one
+ * at a time. Jobs reported as "tooRecent" can be retried by running it again
+ * a few minutes later.
+ */
+export const recoverLegacyCompletions = internalAction({
+  args: {},
+  returns: legacyResult,
+  handler: async (ctx): Promise<Infer<typeof legacyResult>> => {
+    const jobs = await ctx.runQuery(internal.recovery.legacyCandidates, {});
+    const total: Infer<typeof legacyResult> = {
+      recovered: 0,
+      freed: 0,
+      skipped: [],
+    };
+    let i = 0;
+    while (i < jobs.length) {
+      const result = await ctx.runMutation(internal.recovery.recoverLegacy, {
+        jobs: jobs.slice(i, i + RECOVERY_BATCH_SIZE),
+      });
+      // recoverLegacy always handles at least the first job it's given.
+      i += result.processed;
+      total.recovered += result.recovered;
+      total.freed += result.freed;
+      total.skipped.push(...result.skipped);
+    }
+    return total;
+  },
+});
+
+/**
+ * Running jobs older than RECOVERY_THRESHOLD_MS with no completionId: the
+ * ones `recoverLegacy` may be able to repair.
+ */
+export const legacyCandidates = internalQuery({
+  args: {},
+  returns: recoveryArgs.fields.jobs,
+  handler: async (ctx) => {
+    const state = await ctx.db.query("internalState").unique();
+    const oldEnough = Date.now() - RECOVERY_THRESHOLD_MS;
+    const jobs = [];
+    for (const r of state?.running ?? []) {
+      if (r.started >= oldEnough || r.completing) {
+        continue;
+      }
+      const work = await ctx.db.get("work", r.workId);
+      if (work && !work.completionId) {
+        const { workId, scheduledId, started } = r;
+        jobs.push({ workId, scheduledId, started, attempt: work.attempts });
+      }
+    }
+    return jobs;
+  },
+});
+
+export const recoverLegacy = internalMutation({
+  args: recoveryArgs,
+  returns: v.object({ ...legacyResult.fields, processed: v.number() }),
+  handler: async (ctx, { jobs }) => {
+    const globals = await ctx.db.query("globals").unique();
+    const console = createLogger(globals?.logLevel);
+    const reads: Reads = { bytes: 0, docs: new Map() };
+    const result = {
+      recovered: 0,
+      freed: 0,
+      skipped: [] as { workId: Id<"work">; reason: string }[],
+      processed: 0,
+    };
+    for (const job of jobs) {
+      const preamble = `[recoverLegacy] Scheduled job ${job.scheduledId} for work ${job.workId}`;
+      const skip = (reason: string) => {
+        console.info(`${preamble}: skipping, ${reason}`);
+        result.skipped.push({ workId: job.workId, reason });
+      };
+      if (result.processed > 0 && reads.bytes >= RECOVERY_READ_BUDGET) {
+        break;
+      }
+      const work = await ctx.db.get("work", job.workId);
+      const pendingCompletion = await ctx.db
+        .query("pendingCompletion")
+        .withIndex("workId", (q) => q.eq("workId", job.workId))
+        .first();
+      const scheduled =
+        work && !work.completionId && work.attempts === job.attempt
+          ? await readScheduled(ctx, reads, job.scheduledId)
+          : null;
+      if (!work || pendingCompletion || !scheduled) {
+        result.processed++;
+        skip("already finished, completing or retried");
+        continue;
+      }
+      // Only a mutation or query wrapper schedules its own completion; an
+      // action's completion is handled by `completeInline` in worker.ts.
+      // A failed or canceled wrapper is handled by `recover`.
+      if (
+        scheduled.state.kind !== "success" ||
+        !scheduled.name.endsWith("runMutationWrapper")
+      ) {
+        result.processed++;
+        skip(`not a succeeded mutation wrapper (${scheduled.state.kind})`);
+        continue;
+      }
+      const legacy = await findLegacyCompletion(ctx, reads, scheduled, job);
+      if (legacy === "overBudget" && result.processed > 0) {
+        // Leave this job for the next batch, which starts with nothing read.
+        break;
+      }
+      result.processed++;
+      if (
+        legacy === "tooRecent" ||
+        legacy === "truncated" ||
+        legacy === "overBudget"
+      ) {
+        skip(legacy);
+        continue;
+      }
+      if (legacy === null) {
+        console.error(
+          `${preamble} succeeded but its completion is gone; freeing its slot`,
+        );
+        await giveUp(ctx, work._id, "Completion failed: not found");
+        result.freed++;
+        continue;
+      }
+      console.warn(`${preamble} tracking its lost completion ${legacy}`);
+      await ctx.db.patch("work", work._id, { completionId: legacy });
+      const lost = await recoverCompletion(
+        ctx,
+        console,
+        reads,
+        work,
+        legacy,
+        preamble,
+      );
+      if (lost) {
+        result.freed++;
+      } else {
+        result.recovered++;
+      }
+    }
+    if (result.freed > 0) {
+      await kickMainLoop(ctx, "complete");
+    }
+    return result;
+  },
+});
 
 /**
  * Handle work whose completion was scheduled. A pending completion may just
@@ -321,7 +441,10 @@ async function readScheduled(
  * scheduler deletes finished records after a while). Returns "truncated"
  * after checking LEGACY_SCAN_LIMIT records without a match, and "overBudget"
  * once `reads.bytes` reaches RECOVERY_READ_BUDGET; in both cases the answer
- * isn't known.
+ * isn't known. Returns "tooRecent", reading nothing, if the window ends less
+ * than RECOVERY_THRESHOLD_MS ago: the scheduler keeps inserting and updating
+ * recent `_scheduled_functions` records, so reading them would make this
+ * mutation conflict with it.
  */
 // only exported for testing
 export async function findLegacyCompletion(
@@ -329,7 +452,9 @@ export async function findLegacyCompletion(
   reads: Reads,
   wrapper: ScheduledDoc,
   job: { workId: Id<"work">; attempt: number },
-): Promise<Id<"_scheduled_functions"> | null | "truncated" | "overBudget"> {
+): Promise<
+  Id<"_scheduled_functions"> | null | "tooRecent" | "truncated" | "overBudget"
+> {
   // `complete` was created while the wrapper ran: after its scheduledTime
   // and just before its completedTime, which is set as it commits. So the
   // search reads newest first from completedTime, plus a second for clock
@@ -345,6 +470,9 @@ export async function findLegacyCompletion(
         );
   const end =
     (completedTime ?? wrapper.scheduledTime + LEGACY_SEARCH_WINDOW_MS) + 1000;
+  if (end > Date.now() - RECOVERY_THRESHOLD_MS) {
+    return "tooRecent";
+  }
   const candidates = ctx.db.system
     .query("_scheduled_functions")
     .withIndex("by_creation_time", (q) =>
