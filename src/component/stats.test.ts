@@ -102,6 +102,32 @@ describe("stats reports", () => {
     });
   });
 
+  it("leaves rescheduled attempts out of the failure rates", async () => {
+    // Same 10 counted outcomes as the default state, plus 5 reschedules.
+    // Without excluding them, failureRate would read 4/15 instead of 4/10.
+    await t.run(async (ctx) => {
+      const state = (await ctx.db.get("internalState", stateId))!;
+      await ctx.db.patch("internalState", stateId, {
+        report: { ...state.report, completed: 15, rescheduled: 5 },
+      });
+    });
+    await report();
+    expect(reports()).toEqual([
+      expect.objectContaining({
+        event: "report",
+        rescheduled: 5,
+        failureRate: 0.4,
+        permanentFailureRate: 0.25,
+      }),
+    ]);
+  });
+
+  it("doesn't write a rescheduled count until there is one", () => {
+    // 0.5.0's report validator has no `rescheduled` field, so writing 0
+    // would stop a pool that never rescheduled from rolling back.
+    expect("rescheduled" in INITIAL_STATE.report).toBe(false);
+  });
+
   it("defers a large backlog count after a bounded read", async () => {
     for (let i = 0; i < 300; i++) await enqueue(toTimestamp(Date.now() - 1000));
     await t.run(async (ctx) => {

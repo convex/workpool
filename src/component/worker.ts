@@ -182,9 +182,14 @@ function failure(console: Logger, workId: Id<"work">, e: unknown) {
   const reschedule = getReschedule(e);
   if (reschedule) {
     console.info(
-      `[worker] ${workId} rescheduled itself to run in ${reschedule.delayMs}ms`,
+      `[worker] ${workId} rescheduled itself to run in ${reschedule.delayMs}ms: ${reschedule.message ?? "Rescheduled"}`,
     );
-    return { runResult: failedResult(e), reschedule };
+    // complete's `reschedule` validator only accepts delayMs; the message is
+    // only for the log line above.
+    return {
+      runResult: failedResult(e),
+      reschedule: { delayMs: reschedule.delayMs },
+    };
   }
   console.error(e);
   return { runResult: failedResult(e), nonRetryable: isNonRetryableError(e) };

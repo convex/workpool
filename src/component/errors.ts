@@ -1,5 +1,5 @@
 import { ConvexError } from "convex/values";
-import type { RunResult } from "./shared.js";
+import { clampDelayMs, type RunResult } from "./shared.js";
 
 export function failedResult(
   error: unknown,
@@ -106,10 +106,12 @@ type RescheduleErrorData = {
 export type RescheduleOptions = {
   /**
    * How long to wait before running the job again, in milliseconds.
-   * Defaults to 0: run again as soon as there is capacity.
+   * Defaults to 0: run again as soon as there is capacity. Delays over four
+   * years are capped at four years. (Enqueue treats a `runAt` over four years
+   * out differently: it logs an error and runs the job one year from now.)
    */
   delayMs?: number;
-  /** Shown in logs. */
+  /** Included in the worker's "rescheduled itself" log line. */
   message?: string;
 };
 
@@ -118,7 +120,12 @@ export type RescheduleOptions = {
  * arguments, without using up one of its retry attempts.
  *
  * The job stays pending in the meantime, so `onComplete` isn't called until
- * a later attempt finishes. If the job is canceled before it runs again, it
+ * a later attempt finishes. Rescheduling isn't bounded by
+ * `retry.maxAttempts`: a job that keeps throwing this keeps running, so stop
+ * it yourself by canceling it, or in an action by counting runs in your own
+ * table with `ctx.runMutation` before throwing. A mutation or query job can't
+ * keep such a count, because throwing rolls back the mutation's writes and a
+ * query can't write. If the job is canceled before it runs again, it
  * won't run again and `onComplete` is called with `kind: "canceled"`.
  *
  * In a mutation, throwing rolls back that mutation's writes, as with any
@@ -135,7 +142,7 @@ export class RescheduleError extends ConvexError<RescheduleErrorData> {
     super({
       [RESCHEDULE_MARKER]: true,
       message: options?.message ?? "Rescheduled",
-      delayMs,
+      delayMs: clampDelayMs(delayMs),
     });
     this.name = new.target.name;
   }
@@ -143,21 +150,26 @@ export class RescheduleError extends ConvexError<RescheduleErrorData> {
 
 /**
  * If `error` is a {@link RescheduleError}, including one whose data was
- * passed through `ctx.runAction` or `ctx.runMutation`, returns its delay.
+ * passed through `ctx.runAction` or `ctx.runMutation`, returns its delay and
+ * message. The delay is clamped again here because the error data can be
+ * built by hand as a plain `ConvexError`, skipping the constructor's check.
  */
-export function getReschedule(error: unknown): { delayMs: number } | undefined {
+export function getReschedule(
+  error: unknown,
+): { delayMs: number; message?: string } | undefined {
   const data = error instanceof ConvexError ? error.data : undefined;
   if (
     typeof data === "object" &&
     data !== null &&
     (data as Partial<RescheduleErrorData>)[RESCHEDULE_MARKER] === true
   ) {
-    const delayMs = (data as Partial<RescheduleErrorData>).delayMs;
+    const { delayMs, message } = data as Partial<RescheduleErrorData>;
     return {
       delayMs:
         typeof delayMs === "number" && Number.isFinite(delayMs) && delayMs > 0
-          ? delayMs
+          ? clampDelayMs(delayMs)
           : 0,
+      ...(typeof message === "string" ? { message } : {}),
     };
   }
   return undefined;

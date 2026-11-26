@@ -17,6 +17,7 @@ import {
 } from "./logging.js";
 import {
   boundScheduledTime,
+  countedAttempts,
   vConfig,
   fnType,
   vOnCompleteFnContext,
@@ -217,6 +218,9 @@ export const status = query({
   returns: statusValidator,
   handler: statusHandler,
 });
+// previousAttempts is countedAttempts(work), not work.attempts: attempts
+// that threw RescheduleError don't use up the retry budget, so they don't
+// show up here either.
 async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   const work = await ctx.db.get("work", id);
   if (!work) {
@@ -226,20 +230,29 @@ async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
     // During migration, legacy work without a queue pointer reports pending,
     // even if already running. This temporary approximation lasts until the
     // work is upgraded, retried, or finished.
-    return { state: "pending", previousAttempts: work.attempts } as const;
+    return {
+      state: "pending",
+      previousAttempts: countedAttempts(work),
+    } as const;
   }
   if (await findPendingStart(ctx, work)) {
-    return { state: "pending", previousAttempts: work.attempts } as const;
+    return {
+      state: "pending",
+      previousAttempts: countedAttempts(work),
+    } as const;
   }
   const pendingCompletion = await ctx.db
     .query("pendingCompletion")
     .withIndex("workId", (q) => q.eq("workId", id))
     .unique();
   if (pendingCompletion?.retry) {
-    return { state: "pending", previousAttempts: work.attempts } as const;
+    return {
+      state: "pending",
+      previousAttempts: countedAttempts(work),
+    } as const;
   }
   // Assume it's in progress. It could be pending cancelation
-  return { state: "running", previousAttempts: work.attempts } as const;
+  return { state: "running", previousAttempts: countedAttempts(work) } as const;
 }
 
 export const statusBatch = query({

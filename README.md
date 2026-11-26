@@ -390,8 +390,17 @@ export const syncAccount = internalAction({
   handler: async (ctx, { accountId }) => {
     const response = await fetch(`https://api.example.com/sync/${accountId}`);
     if (response.status === 429) {
-      const retryAfter = Number(response.headers.get("Retry-After") ?? 60);
-      throw new RescheduleError({ delayMs: retryAfter * 1000 });
+      // Retry-After is either a number of seconds or an HTTP date. A date in
+      // the past means "now"; a header we can't parse falls back to 60s.
+      const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
+      const seconds = retryAfter === "" ? NaN : Number(retryAfter);
+      const date = Date.parse(retryAfter);
+      const delayMs = Number.isFinite(seconds)
+        ? Math.max(seconds, 0) * 1000
+        : !Number.isNaN(date)
+          ? Math.max(date - Date.now(), 0)
+          : 60_000;
+      throw new RescheduleError({ delayMs });
     }
     // ...
   },
@@ -401,8 +410,13 @@ export const syncAccount = internalAction({
 The job stays pending while it waits, and `onComplete` isn't called until a
 later attempt finishes. If the job is canceled in the meantime, it doesn't run
 again and its result is `canceled`. Rescheduled attempts don't count toward
-`maxAttempts` or the retry backoff. As with any thrown error, a mutation that
-throws `RescheduleError` rolls back its writes.
+`maxAttempts`, the retry backoff, or `previousAttempts` in `status`. As with any
+thrown error, a mutation that throws `RescheduleError` rolls back its writes.
+
+Because rescheduling doesn't use up attempts, `maxAttempts` doesn't stop a job
+that keeps throwing `RescheduleError`. If it might never succeed, keep your own
+count or deadline and return or throw a regular error once it's reached, or
+cancel the job. Delays over four years are capped at four years.
 
 ## Optimizations with and without Workpool
 
