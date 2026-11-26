@@ -110,8 +110,9 @@ export class Workpool {
       "action",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
@@ -150,8 +151,9 @@ export class Workpool {
       "action",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
@@ -187,8 +189,9 @@ export class Workpool {
       "mutation",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -219,8 +222,9 @@ export class Workpool {
       "mutation",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -249,8 +253,9 @@ export class Workpool {
       "query",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -282,8 +287,9 @@ export class Workpool {
       "query",
       FunctionVisibility,
       Args,
-      // A job that returns continueWith runs again rather than completing.
-      NoInfer<ReturnType> | Continuation<any>
+      // A job that returns continueWith(nextArgs) runs again with nextArgs,
+      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
+      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
     >,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
@@ -655,7 +661,7 @@ export async function enqueueBatch<
     FnType,
     FunctionVisibility,
     Args,
-    NoInfer<ReturnType> | Continuation<any>
+    NoInfer<ReturnType> | Continuation<NoInfer<Args>>
   >,
   fnArgsArray: Array<Args>,
   options: EnqueueOptions<Context, ReturnType> & {
@@ -723,7 +729,7 @@ export async function enqueue<
     FnType,
     FunctionVisibility,
     Args,
-    NoInfer<ReturnType> | Continuation<any>
+    NoInfer<ReturnType> | Continuation<NoInfer<Args>>
   >,
   fnArgs: Args,
   options: EnqueueOptions<Context, ReturnType> & {

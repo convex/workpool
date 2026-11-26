@@ -65,9 +65,10 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     succeeded: 0,
     failed: 0,
     retries: 0,
-    // No `rescheduled: 0` here: 0.5.0's report validator has no such field,
-    // so writing it would block a rollback even on pools that never used
-    // RescheduleError. handleCompletions sets it on the first reschedule.
+    // No `rescheduled: 0` or `continued: 0` here: 0.5.0's report validator
+    // has neither field, so writing them would block a rollback even on pools
+    // that never used RescheduleError or continueWith. handleCompletions sets
+    // each on its first use.
     canceled: 0,
     lastReportTs: 0,
   },
@@ -82,6 +83,7 @@ const vCompletion = v.object({
   runResult: vResult,
   retry: v.boolean(),
   rescheduleDelayMs: v.optional(v.number()),
+  continued: v.optional(v.boolean()),
   segment: v.int64(),
 });
 type Completion = Infer<typeof vCompletion>;
@@ -193,6 +195,7 @@ export const getBatch = internalQuery({
           ...(c.rescheduleDelayMs !== undefined
             ? { rescheduleDelayMs: c.rescheduleDelayMs }
             : {}),
+          ...(c.continued ? { continued: true } : {}),
           segment: c.segment as bigint,
         })),
         cancelations: cancelations.map((c) => ({
@@ -514,7 +517,10 @@ async function handleCompletions(
           return;
         }
         if (await rescheduleJob(ctx, work, console, c.rescheduleDelayMs)) {
-          if (c.rescheduleDelayMs !== undefined) {
+          if (c.continued) {
+            state.report.continued = (state.report.continued ?? 0) + 1;
+            recordCompleted(console, work, "continued", undefined);
+          } else if (c.rescheduleDelayMs !== undefined) {
             state.report.rescheduled = (state.report.rescheduled ?? 0) + 1;
             recordCompleted(console, work, "rescheduled", undefined);
           } else {

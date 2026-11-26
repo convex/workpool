@@ -7,7 +7,8 @@ const PAYLOAD_DOC_OVERHEAD = 78; // Size of { args: null, context: null }
 /**
  * Decides whether a job's args and onComplete context are stored on the work
  * document, or separately in a payload document when they're large.
- * Throws if either is too large to store at all.
+ * Throws if either is too large to store at all, or if both go in the
+ * payload document and together exceed its size limit.
  */
 export function layoutPayload(
   fnName: string,
@@ -40,7 +41,16 @@ export function layoutPayload(
   if (fnArgsSize >= INLINE_METADATA_THRESHOLD) {
     // Args are large, store separately
     if (contextSize >= INLINE_METADATA_THRESHOLD) {
-      // Context is also too big to inline
+      // Context is also too big to inline, so both share one payload doc.
+      // Each can pass its own check above and still overflow it together;
+      // throw here, before the caller writes anything, rather than at the
+      // payload insert (continueWithArgs in complete.ts relies on this).
+      const combinedSize = fnArgsSize + contextSize + PAYLOAD_DOC_OVERHEAD;
+      if (combinedSize > MAX_DOC_SIZE) {
+        throw new Error(
+          `Function arguments and onComplete context for function ${fnName} too large together: ${combinedSize} bytes (max: ${MAX_DOC_SIZE} bytes)`,
+        );
+      }
       return {
         payload: { args: fnArgs, context },
         payloadSize: fnArgsSize + contextSize + PAYLOAD_DOC_OVERHEAD,

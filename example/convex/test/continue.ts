@@ -4,10 +4,12 @@ import {
   query,
   internalAction,
   internalMutation,
+  internalQuery,
 } from "../_generated/server";
 import { components, internal } from "../_generated/api";
 import {
   continueWith,
+  RescheduleError,
   vOnCompleteArgs,
   vWorkId,
   WorkId,
@@ -40,6 +42,22 @@ export const recordCompletion = internalMutation({
       misc: {
         kind: COMPLETION_EVENT,
         result: result.kind,
+        ...(result.kind === "success" ? { value: result.returnValue } : {}),
+        ...(result.kind === "failed" ? { error: result.error } : {}),
+      },
+    });
+  },
+});
+
+/** Records the onComplete context's length, to check it survived. */
+export const recordContextCompletion = internalMutation({
+  args: vOnCompleteArgs(v.string(), v.number()),
+  handler: async (ctx, { context, result }) => {
+    await ctx.db.insert("data", {
+      misc: {
+        kind: COMPLETION_EVENT,
+        result: result.kind,
+        contextLength: context.length,
         ...(result.kind === "success" ? { value: result.returnValue } : {}),
         ...(result.kind === "failed" ? { error: result.error } : {}),
       },
@@ -119,20 +137,172 @@ export const enqueueSteps = mutation({
     delayMs: v.number(),
     failFirst: v.boolean(),
     paddingBytes: v.optional(v.number()),
+    // Passes a string context this long, recorded by recordContextCompletion.
+    contextBytes: v.optional(v.number()),
     maxAttempts: v.optional(v.number()),
   },
   handler: async (
     ctx,
-    { maxAttempts, paddingBytes, ...args },
+    { maxAttempts, paddingBytes, contextBytes, ...args },
   ): Promise<WorkId> => {
+    const fnArgs = { ...args, step: 1, padding: "x".repeat(paddingBytes ?? 0) };
+    const retry = maxAttempts
+      ? { maxAttempts, initialBackoffMs: 100, base: 2 }
+      : false;
+    if (contextBytes !== undefined) {
+      return await smallPool.enqueueAction(
+        ctx,
+        internal.test.continue.stepAction,
+        fnArgs,
+        {
+          retry,
+          onComplete: internal.test.continue.recordContextCompletion,
+          context: "c".repeat(contextBytes),
+        },
+      );
+    }
     return await smallPool.enqueueAction(
       ctx,
       internal.test.continue.stepAction,
-      { ...args, step: 1, padding: "x".repeat(paddingBytes ?? 0) },
+      fnArgs,
       {
-        retry: maxAttempts
-          ? { maxAttempts, initialBackoffMs: 100, base: 2 }
-          : false,
+        retry,
+        onComplete: internal.test.continue.recordCompletion,
+        context: null,
+      },
+    );
+  },
+});
+
+/**
+ * Continues with 600 KB args. Its 600 KB onComplete context fits alone, but
+ * not in one payload document with the args.
+ */
+export const oversizedWithContextAction = internalAction({
+  args: { padding: v.optional(v.string()) },
+  handler: async (_ctx, { padding }) => {
+    if (padding) return 0;
+    return continueWith({ padding: "x".repeat(600_000) });
+  },
+});
+
+export const enqueueOversizedWithContext = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.test.continue.oversizedWithContextAction,
+      {},
+      {
+        onComplete: internal.test.continue.recordContextCompletion,
+        context: "c".repeat(600_000),
+      },
+    );
+  },
+});
+
+const SELF_CANCEL_EVENT = "continueSelfCancel";
+
+/** Cancels the job whose id enqueueSelfCanceling stored. */
+export const cancelStoredJob = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const docs = await ctx.db.query("data").collect();
+    const doc = docs.find((d) => isEvent(d.misc, SELF_CANCEL_EVENT));
+    if (doc) await smallPool.cancel(ctx, doc.misc.id as WorkId);
+  },
+});
+
+/** Cancels its own job mid-step, then asks for another step. */
+export const selfCancelingAction = internalAction({
+  args: { step: v.number() },
+  handler: async (ctx, { step }) => {
+    await ctx.runMutation(internal.test.continue.recordStep, { step });
+    await ctx.runMutation(internal.test.continue.cancelStoredJob, {});
+    return continueWith({ step: step + 1 });
+  },
+});
+
+export const enqueueSelfCanceling = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    const id = await smallPool.enqueueAction(
+      ctx,
+      internal.test.continue.selfCancelingAction,
+      { step: 1 },
+      { onComplete: internal.test.continue.recordCompletion, context: null },
+    );
+    await ctx.db.insert("data", { misc: { kind: SELF_CANCEL_EVENT, id } });
+    return id;
+  },
+});
+
+/** Counts up to 3 one step at a time; queries can continue too. */
+export const countQuery = internalQuery({
+  args: { n: v.number() },
+  handler: async (_ctx, { n }) => (n >= 3 ? n : continueWith({ n: n + 1 })),
+});
+
+export const enqueueCountQuery = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueQuery(
+      ctx,
+      internal.test.continue.countQuery,
+      { n: 1 },
+      { onComplete: internal.test.continue.recordCompletion, context: null },
+    );
+  },
+});
+
+/** Reschedules the first try of each step, then continues to step 2. */
+export const mixedAction = internalAction({
+  args: { step: v.number() },
+  handler: async (ctx, { step }) => {
+    const tries: number = await ctx.runMutation(
+      internal.test.continue.recordStep,
+      { step },
+    );
+    if (tries === 1) {
+      throw new RescheduleError({ delayMs: 1_000 });
+    }
+    if (step >= 2) return step;
+    return continueWith({ step: step + 1 });
+  },
+});
+
+export const enqueueMixed = mutation({
+  args: { maxAttempts: v.number() },
+  handler: async (ctx, { maxAttempts }): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.test.continue.mixedAction,
+      { step: 1 },
+      {
+        retry: { maxAttempts, initialBackoffMs: 100, base: 2 },
+        onComplete: internal.test.continue.recordCompletion,
+        context: null,
+      },
+    );
+  },
+});
+
+/** Returns the continueWith marker without args, as hand-built data might. */
+export const badMarkerAction = internalAction({
+  args: {},
+  handler: async () =>
+    ({ __convexWorkpoolContinue: true, delayMs: 0 }) as unknown as number,
+});
+
+export const enqueueBadMarker = mutation({
+  args: {},
+  handler: async (ctx): Promise<WorkId> => {
+    return await smallPool.enqueueAction(
+      ctx,
+      internal.test.continue.badMarkerAction,
+      {},
+      {
+        retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
         onComplete: internal.test.continue.recordCompletion,
         context: null,
       },

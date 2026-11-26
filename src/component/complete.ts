@@ -4,7 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
 import { kickMainLoop } from "./kick.js";
-import { createLogger } from "./logging.js";
+import { createLogger, type Logger } from "./logging.js";
 import {
   countedAttempts,
   type OnCompleteArgs,
@@ -53,6 +53,7 @@ export async function completeHandler(
     workId: Id<"work">;
     retry: boolean;
     rescheduleDelayMs?: number;
+    continued?: boolean;
   }[] = [];
   const jobAndWorks = (
     await Promise.all(
@@ -138,7 +139,7 @@ export async function completeHandler(
       }
       if (job.continueWith) {
         try {
-          await continueWithArgs(ctx, work, job.continueWith.args);
+          await continueWithArgs(ctx, console, work, job.continueWith.args);
         } catch (e) {
           // The next step can't be stored, so the job fails here.
           console.error(`[complete] ${job.workId} can't continue: ${e}`);
@@ -238,6 +239,8 @@ export async function completeHandler(
           workId: job.workId,
           retry,
           ...(reschedule ? { rescheduleDelayMs: reschedule.delayMs } : {}),
+          // job.continueWith is deleted above if the step couldn't be stored.
+          ...(job.continueWith ? { continued: true } : {}),
         });
       }
     }),
@@ -262,10 +265,16 @@ export async function completeHandler(
 
 /**
  * Stores the args for a job's next step, and starts its retry budget over.
- * Throws if the args are too large to store.
+ * Throws if the args are too large to store. completeHandler catches that and
+ * fails the job, but this mutation still commits, so nothing here may be
+ * written before the step is known to fit: layoutPayload runs (and throws)
+ * before any write, and the new payload is inserted before the old one is
+ * deleted, so a failure leaves the old args and onComplete context in place
+ * for onComplete to read.
  */
 async function continueWithArgs(
   ctx: MutationCtx,
+  console: Logger,
   work: Doc<"work">,
   args: Record<string, unknown>,
 ) {
@@ -274,9 +283,9 @@ async function continueWithArgs(
     context = (await ctx.db.get("payload", work.payloadId))?.context;
   }
   const layout = layoutPayload(work.fnName, args, context);
-  if (work.payloadId) {
-    await ctx.db.delete("payload", work.payloadId);
-  }
+  const payloadId = layout.payload
+    ? await ctx.db.insert("payload", layout.payload)
+    : undefined;
   let onComplete = work.onComplete;
   if (onComplete) {
     const { context: _, ...rest } = onComplete;
@@ -288,13 +297,22 @@ async function continueWithArgs(
   await ctx.db.patch("work", work._id, {
     fnArgs: layout.fnArgs,
     onComplete,
-    payloadId: layout.payload
-      ? await ctx.db.insert("payload", layout.payload)
-      : undefined,
+    payloadId,
     payloadSize: layout.payload ? layout.payloadSize : undefined,
     // Each step gets the full retry budget.
     skippedAttempts: work.attempts,
   });
+  if (work.payloadId) {
+    // Deleting a missing doc throws. The work already points at the new
+    // payload, so a throw here would fail a step that was stored fine.
+    try {
+      await ctx.db.delete("payload", work.payloadId);
+    } catch (e) {
+      console.warn(
+        `[complete] couldn't delete old payload for ${work._id}: ${e}`,
+      );
+    }
+  }
 }
 
 function stripResult(result: RunResult): RunResult {

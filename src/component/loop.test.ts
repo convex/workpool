@@ -1002,6 +1002,38 @@ describe("loop", () => {
       );
     });
 
+    it("counts continueWith steps apart from reschedules and retries", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+      await runLoop();
+      await t.mutation(internal.complete.complete, {
+        jobs: [
+          {
+            workId,
+            runResult: { kind: "success", returnValue: null },
+            attempt: 0,
+            continueWith: { args: { page: 2 }, delayMs: 0 },
+          },
+        ],
+      });
+      await runLoop();
+
+      const state = await t.run((ctx) =>
+        ctx.db.query("internalState").unique(),
+      );
+      expect(state?.report).toMatchObject({ continued: 1, retries: 0 });
+      // Written only once nonzero, so 0.5.0 can still read the document.
+      expect(state?.report).not.toHaveProperty("rescheduled");
+      const work = await t.run((ctx) => ctx.db.get("work", workId));
+      expect(work?.fnArgs).toEqual({ page: 2 });
+      expect(await statusOf(workId)).toEqual({
+        state: "pending",
+        previousAttempts: 0,
+      });
+    });
+
     it("counts reschedules apart from retries and leaves previousAttempts alone", async () => {
       await initialize();
       const workId = await enqueueWork({

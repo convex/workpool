@@ -422,9 +422,11 @@ cancel the job. Delays over four years are capped at four years.
 
 For work that proceeds in steps, such as paging through a table, return
 `continueWith(nextArgs)` from the job. Workpool runs the same function again
-with `nextArgs`, and only calls `onComplete` once the job returns something
-else. Unlike throwing, returning commits a mutation's writes, so each step keeps
-its progress.
+with `nextArgs`. `onComplete` runs once: after the final step, which returns
+something other than `continueWith`, or when a step fails or is canceled. That
+includes failing to store the next step's args, for example when they're over
+the 1 MB document limit together with the `onComplete` context. Unlike throwing,
+returning commits a mutation's writes, so each step keeps its progress.
 
 ```ts
 import { continueWith } from "@convex-dev/workpool";
@@ -446,9 +448,10 @@ export const countPosts = internalMutation({
 
 Pass `{ delayMs }` as the second argument to wait before the next step. Each
 step gets the job's full retry behavior, so failures in earlier steps don't
-count against later ones. If the job is canceled, the next step doesn't run. If
-your function declares a `returns` validator, include `vContinuation` in it,
-e.g. `returns: v.union(v.number(), vContinuation)`.
+count against later ones. If the job is canceled, the next step doesn't run.
+Delays over four years are capped at four years. If your function declares a
+`returns` validator, include `vContinuation` in it, e.g.
+`returns: v.union(v.number(), vContinuation)`.
 
 ## Optimizations with and without Workpool
 
@@ -567,7 +570,7 @@ Note: to get this data, set the workpool `logLevel` to `"INFO"` (or `"DEBUG"`).
 | extend parsed_message = iff( 	isnotnull(parse_json(trim("'", tostring(["data.message"])))),
   parse_json(trim("'", tostring(["data.message"]))),
   parse_json('{}') )
-| where parsed_message["component"] == "workpool" and (parsed_message["event"] == "completed") and parsed_message["status"] !in ("canceled", "rescheduled")
+| where parsed_message["component"] == "workpool" and (parsed_message["event"] == "completed") and parsed_message["status"] !in ("canceled", "rescheduled", "continued")
 | summarize failure_ratio = avg(iff(parsed_message["status"] != "success", 1, 0))
   by bin(_time, 5m), function = tostring(parsed_message["fnName"])
 ```

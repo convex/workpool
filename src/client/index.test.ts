@@ -21,6 +21,8 @@ import {
 import workpool from "../test.js";
 import type { api } from "../component/_generated/api.js";
 import {
+  type Continuation,
+  continueWith,
   type EnqueueOptions,
   NonRetryableError,
   type OnCompleteArgs,
@@ -798,6 +800,39 @@ test("onComplete retains context and return value types", () => {
       ctx,
       action,
       { value: 1 },
+      { onComplete, context: { label: "job" } },
+    );
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+});
+
+test("continueWith args are checked against the job's args", () => {
+  type StepArgs = { cursor?: string; total: number };
+  // continueWith accepts arg objects with optional properties.
+  const next = continueWith<StepArgs>({ total: 1 });
+  expectTypeOf(next).toEqualTypeOf<Continuation<StepArgs>>();
+  // tsc checks these call sites; the function is never invoked at runtime.
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    const stepAction = makeFunctionReference<
+      "action",
+      StepArgs,
+      number | Continuation<StepArgs>
+    >("work:stepAction");
+    void pool.enqueueAction(
+      ctx,
+      stepAction,
+      { total: 0 },
+      { onComplete, context: { label: "job" } },
+    );
+    const wrongStepAction = makeFunctionReference<
+      "action",
+      StepArgs,
+      number | Continuation<{ page: number }>
+    >("work:wrongStepAction");
+    return pool.enqueueAction(
+      ctx,
+      // @ts-expect-error The continuation's args don't match the job's args.
+      wrongStepAction,
+      { total: 0 },
       { onComplete, context: { label: "job" } },
     );
   }).returns.toEqualTypeOf<Promise<WorkId>>();

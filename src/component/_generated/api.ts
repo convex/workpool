@@ -10,6 +10,7 @@
 
 import type * as complete from "../complete.js";
 import type * as config from "../config.js";
+import type * as continue_ from "../continue.js";
 import type * as danger from "../danger.js";
 import type * as errors from "../errors.js";
 import type * as kick from "../kick.js";
@@ -17,6 +18,7 @@ import type * as lib from "../lib.js";
 import type * as logging from "../logging.js";
 import type * as loop from "../loop.js";
 import type * as migrations from "../migrations.js";
+import type * as payload from "../payload.js";
 import type * as pendingStart from "../pendingStart.js";
 import type * as recovery from "../recovery.js";
 import type * as shared from "../shared.js";
@@ -33,6 +35,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 const fullApi: ApiFromModules<{
   complete: typeof complete;
   config: typeof config;
+  continue: typeof continue_;
   danger: typeof danger;
   errors: typeof errors;
   kick: typeof kick;
@@ -40,6 +43,7 @@ const fullApi: ApiFromModules<{
   logging: typeof logging;
   loop: typeof loop;
   migrations: typeof migrations;
+  payload: typeof payload;
   pendingStart: typeof pendingStart;
   recovery: typeof recovery;
   shared: typeof shared;

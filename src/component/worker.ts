@@ -181,6 +181,16 @@ async function runOne(
 /** How a job that returned should complete: continued, or succeeded. */
 function success(console: Logger, workId: Id<"work">, returnValue: unknown) {
   const continuation = getContinuation(returnValue);
+  if (continuation && "error" in continuation) {
+    // A hand-built marker object with bad args: running the next step would
+    // fail anyway, and reporting it as success would hand onComplete the
+    // marker object as the result. Retrying would return the same value.
+    console.error(`[worker] ${workId} ${continuation.error}`);
+    return {
+      runResult: { kind: "failed", error: continuation.error } as RunResult,
+      nonRetryable: true,
+    };
+  }
   if (continuation) {
     console.info(
       `[worker] ${workId} continues with new args in ${continuation.delayMs}ms`,
