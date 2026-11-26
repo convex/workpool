@@ -107,7 +107,8 @@ export type RescheduleOptions = {
   /**
    * How long to wait before running the job again, in milliseconds.
    * Defaults to 0: run again as soon as there is capacity. Delays over four
-   * years are capped at four years, the same bound enqueue's `runAt` has.
+   * years are capped at four years. (Enqueue treats a `runAt` over four years
+   * out differently: it logs an error and runs the job one year from now.)
    */
   delayMs?: number;
   /** Included in the worker's "rescheduled itself" log line. */
