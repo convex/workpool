@@ -125,12 +125,14 @@ export const runBatch = internalAction({
 /**
  * Complete a single action/query. Runs the completion — including the
  * onComplete callback — inline in its own transaction (called directly from
- * this action). If that hits an OCC, we fall back to scheduled onComplete; the
- * scheduler retries it (and its inline onComplete) on OCC until it succeeds.
- * This is safe even for a job whose function already ran:
+ * this action). If that call throws for any reason, including an OCC, this
+ * schedules `complete` with runOnCompleteInline: false. That run saves the
+ * completion and schedules onComplete as its own function, so on this path the
+ * two commit separately. This is safe even for a job whose function already ran:
  * `complete` marks the work done exactly once, guarded by the work deletion.
  */
-async function completeInline(
+// Exported only for worker.test.ts.
+export async function completeInline(
   ctx: ActionCtx,
   console: Logger,
   job: CompleteJob,
@@ -141,8 +143,16 @@ async function completeInline(
     console.error(
       `[runBatch] completing ${job.workId} inline failed, falling back to scheduled onComplete: ${e}`,
     );
+    // Schedule `complete` with runOnCompleteInline off. If the inline
+    // onComplete broke the mutation in a way its try/catch in complete.ts
+    // can't catch (timeout, OOM, transaction limits), running it inline again
+    // fails the same way, the scheduled `complete` dies, and no
+    // pendingCompletion row is ever written: the job holds a running slot
+    // forever because recovery ignores a worker that ended in "success".
+    // With it off, `complete` records the completion and schedules onComplete
+    // as its own function, so an onComplete failure can't block completion.
     await ctx.scheduler.runAfter(0, internal.complete.complete, {
-      jobs: [job],
+      jobs: [{ ...job, runOnCompleteInline: false }],
     });
   }
 }
