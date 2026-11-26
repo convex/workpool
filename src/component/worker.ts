@@ -125,9 +125,10 @@ export const runBatch = internalAction({
 /**
  * Complete a single action/query. Runs the completion — including the
  * onComplete callback — inline in its own transaction (called directly from
- * this action). If that hits an OCC, we fall back to scheduled onComplete; the
- * scheduler retries it (and its inline onComplete) on OCC until it succeeds.
- * This is safe even for a job whose function already ran:
+ * this action). If that call throws for any reason, including an OCC, this
+ * schedules `complete` with runOnCompleteInline: false. That run saves the
+ * completion and schedules onComplete as its own function, so on this path the
+ * two commit separately. This is safe even for a job whose function already ran:
  * `complete` marks the work done exactly once, guarded by the work deletion.
  */
 // Exported only for worker.test.ts.
