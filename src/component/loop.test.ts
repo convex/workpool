@@ -22,6 +22,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   fromTimestamp,
+  clampDelayMs,
   MAX_SCHEDULE_AHEAD_MS,
   toSegment,
   toTimestamp,
@@ -987,7 +988,7 @@ describe("loop", () => {
 
     it("caps a long retry backoff too", async () => {
       await initialize();
-      // Backoff for attempt 35 at one-minute doubling is ~3e13 ms, past
+      // Backoff for attempt 35 at one-minute doubling is 60_000 * 2^34, ~1e15 ms, past
       // int64 segment range once turned into a timestamp.
       const workId = await enqueueWork({
         retryBehavior: { maxAttempts: 40, initialBackoffMs: MINUTE, base: 2 },
@@ -1032,6 +1033,29 @@ describe("loop", () => {
         state: "pending",
         previousAttempts: 0,
       });
+    });
+
+    it("caps a retry backoff that comes out NaN", async () => {
+      await initialize();
+      // 0 * Math.pow(2, 1100) is 0 * Infinity, which is NaN; BigInt(NaN) in
+      // toTimestamp would throw inside the loop on every run.
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 2000, initialBackoffMs: 0, base: 2 },
+      });
+      await t.run((ctx) => ctx.db.patch("work", workId, { attempts: 1100 }));
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 1100);
+      await runLoop();
+      expect(fromTimestamp(await onlyStartSegment())).toBeLessThanOrEqual(
+        Date.now() + MAX_SCHEDULE_AHEAD_MS + SECOND,
+      );
+    });
+
+    it("clampDelayMs maps NaN to the cap and negatives to 0", () => {
+      expect(clampDelayMs(NaN)).toBe(MAX_SCHEDULE_AHEAD_MS);
+      expect(clampDelayMs(-Number.MAX_VALUE)).toBe(0);
+      expect(clampDelayMs(Infinity)).toBe(MAX_SCHEDULE_AHEAD_MS);
+      expect(clampDelayMs(1234)).toBe(1234);
     });
 
     it("counts reschedules apart from retries and leaves previousAttempts alone", async () => {
@@ -1212,6 +1236,30 @@ describe("loop", () => {
       });
       assert(result.kind === "idle");
       expect(result.timeoutMs).toBeGreaterThan(0);
+    });
+
+    it("caps the idle wake-up for a start stored past the cap", async () => {
+      await initialize();
+      // A pendingStart 10 years out, as 0.5.0 could write with a long retry
+      // backoff. getBatch must not ask batch-worker to wake past the
+      // backend's 5-year runAfter limit.
+      const workId = await enqueueWork({}, { runAt: Date.now() + MINUTE });
+      await t.run(async (ctx) => {
+        const work = await ctx.db.get("work", workId);
+        assert(work?.pendingStartId);
+        const start = await ctx.db.get("pendingStart", work.pendingStartId);
+        assert(start);
+        await ctx.db.patch("pendingStart", start._id, {
+          segment: toTimestamp(Date.now() + 10 * 365 * 24 * 60 * MINUTE),
+        });
+      });
+      await runLoop(); // the sweep verifies the entry, once
+
+      const result = await t.query(internal.loop.getBatch, {
+        name: WORKER_NAME,
+      });
+      assert(result.kind === "idle");
+      expect(result.timeoutMs).toBe(MAX_SCHEDULE_AHEAD_MS);
     });
 
     it("sweeps near-future work once, then idles until it's due", async () => {

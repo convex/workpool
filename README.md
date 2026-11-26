@@ -392,10 +392,10 @@ export const syncAccount = internalAction({
     if (response.status === 429) {
       // Retry-After is either a number of seconds or an HTTP date. A date in
       // the past means "now"; a header we can't parse falls back to 60s.
-      const retryAfter = response.headers.get("Retry-After") ?? "60";
-      const seconds = Number(retryAfter);
+      const retryAfter = response.headers.get("Retry-After")?.trim() ?? "";
+      const seconds = retryAfter === "" ? NaN : Number(retryAfter);
       const date = Date.parse(retryAfter);
-      const delayMs = !Number.isNaN(seconds)
+      const delayMs = Number.isFinite(seconds)
         ? Math.max(seconds, 0) * 1000
         : !Number.isNaN(date)
           ? Math.max(date - Date.now(), 0)
