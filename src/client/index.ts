@@ -319,6 +319,9 @@ export class Workpool {
    * - `{ state: "pending", previousAttempts: number }`
    * - `{ state: "running", previousAttempts: number }`
    * - `{ state: "finished" }`
+   *
+   * `previousAttempts` counts attempts toward `retry.maxAttempts`, so
+   * attempts that threw `RescheduleError` aren't included.
    */
   async status(
     ctx: QueryCtx | MutationCtx | ActionCtx,

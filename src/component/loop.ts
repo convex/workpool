@@ -21,6 +21,7 @@ import {
   type LogLevel,
 } from "./logging.js";
 import {
+  clampDelayMs,
   type Config,
   countedAttempts,
   DEFAULT_MAX_PARALLELISM,
@@ -64,7 +65,9 @@ export const INITIAL_STATE: WithoutSystemFields<Doc<"internalState">> = {
     succeeded: 0,
     failed: 0,
     retries: 0,
-    rescheduled: 0,
+    // No `rescheduled: 0` here: 0.5.0's report validator has no such field,
+    // so writing it would block a rollback even on pools that never used
+    // RescheduleError. handleCompletions sets it on the first reschedule.
     canceled: 0,
     lastReportTs: 0,
   },
@@ -319,7 +322,8 @@ export const run = internalMutation({
         succeeded: 0,
         failed: 0,
         retries: 0,
-        rescheduled: 0,
+        // Left out until nonzero so 0.5.0 can still read this document; see
+        // INITIAL_STATE.
         canceled: 0,
         lastReportTs,
       };
@@ -833,7 +837,10 @@ async function rescheduleJob(
   }
   // Date.now() is at least this mutation's snapshot, so retries cannot land
   // behind the incoming cursor, which is bounded by the query's snapshot.
-  const segment = toTimestamp(Date.now() + nextAttempt);
+  // clampDelayMs covers retry backoff and reschedule delays alike: a long
+  // exponential backoff reaches the backend's 5-year runAfter limit around
+  // attempt 23 and overflows the int64 segment around attempt 30.
+  const segment = toTimestamp(Date.now() + clampDelayMs(nextAttempt));
   const pendingStartId = await ctx.db.insert("pendingStart", {
     workId: work._id,
     segment,

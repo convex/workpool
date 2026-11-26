@@ -22,6 +22,7 @@ import {
   DEFAULT_MAX_PARALLELISM,
   fromSegment,
   fromTimestamp,
+  MAX_SCHEDULE_AHEAD_MS,
   toSegment,
   toTimestamp,
   WORKER_NAME,
@@ -914,6 +915,122 @@ describe("loop", () => {
       expect(o.pendingStart).toHaveLength(0);
       const work = await t.run(async (ctx) => ctx.db.get("work", workId));
       expect(work?.canceled).toBe(true);
+    });
+  });
+
+  describe("reschedule", () => {
+    /** Complete a job the way the worker does after RescheduleError. */
+    async function simulateReschedule(
+      workId: Id<"work">,
+      delayMs: number,
+      attempt = 0,
+    ) {
+      await t.mutation(internal.complete.complete, {
+        jobs: [
+          {
+            workId,
+            runResult: { kind: "failed", error: "Rescheduled" },
+            attempt,
+            reschedule: { delayMs },
+          },
+        ],
+      });
+    }
+
+    async function onlyStartSegment() {
+      const { pendingStart } = await observe();
+      expect(pendingStart).toHaveLength(1);
+      return pendingStart[0].segment as bigint;
+    }
+
+    it("caps a huge delay so the loop keeps running and the job can be canceled", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runLoop();
+      // complete's validator takes any number, bypassing the
+      // RescheduleError constructor's clamp, so this exercises
+      // rescheduleJob's own clamp.
+      await simulateReschedule(workId, Number.MAX_SAFE_INTEGER);
+      await runLoop();
+
+      const segment = await onlyStartSegment();
+      expect(fromTimestamp(segment)).toBeLessThanOrEqual(
+        // toTimestamp's rounding can land a millisecond past the cap.
+        Date.now() + MAX_SCHEDULE_AHEAD_MS + SECOND,
+      );
+      // Later work still starts: the loop isn't stuck on the bad insert.
+      const other = await enqueueWork();
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toEqual([other]);
+
+      // Canceling removes the far-future start.
+      await t.mutation(api.lib.cancel, { id: workId });
+      await runLoop();
+      expect(
+        (await observe()).pendingStart.filter((p) => p.workId === workId),
+      ).toHaveLength(0);
+    });
+
+    it("still runs a job whose delay was capped once the cap elapses", async () => {
+      await initialize();
+      const workId = await enqueueWork();
+      await runLoop();
+      await simulateReschedule(workId, Number.MAX_SAFE_INTEGER);
+      await runLoop();
+      await runLoop(); // the sweep verifies the entry, once
+      expect((await runLoop()).kind).toBe("idle");
+
+      vi.setSystemTime(Date.now() + MAX_SCHEDULE_AHEAD_MS + SECOND);
+      await runLoop();
+      expect((await observe()).running.map((r) => r.workId)).toEqual([workId]);
+    });
+
+    it("caps a long retry backoff too", async () => {
+      await initialize();
+      // Backoff for attempt 35 at one-minute doubling is ~3e13 ms, past
+      // int64 segment range once turned into a timestamp.
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 40, initialBackoffMs: MINUTE, base: 2 },
+      });
+      await t.run((ctx) => ctx.db.patch("work", workId, { attempts: 34 }));
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 34);
+      await runLoop();
+      expect(fromTimestamp(await onlyStartSegment())).toBeLessThanOrEqual(
+        // toTimestamp's rounding can land a millisecond past the cap.
+        Date.now() + MAX_SCHEDULE_AHEAD_MS + SECOND,
+      );
+    });
+
+    it("counts reschedules apart from retries and leaves previousAttempts alone", async () => {
+      await initialize();
+      const workId = await enqueueWork({
+        retryBehavior: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
+      });
+      await runLoop();
+      await simulateReschedule(workId, 0);
+      await runLoop();
+
+      const state = await t.run((ctx) =>
+        ctx.db.query("internalState").unique(),
+      );
+      expect(state?.report).toMatchObject({ rescheduled: 1, retries: 0 });
+      const work = await t.run((ctx) => ctx.db.get("work", workId));
+      expect(work).toMatchObject({ attempts: 1, skippedAttempts: 1 });
+      // The reschedule didn't use up a retry, so status doesn't show one.
+      expect(await statusOf(workId)).toEqual({
+        state: "pending",
+        previousAttempts: 0,
+      });
+
+      // A real failure after that does count.
+      await runLoop();
+      await simulateCompletion(workId, { kind: "failed", error: "boom" }, 1);
+      await runLoop();
+      expect(await statusOf(workId)).toEqual({
+        state: "pending",
+        previousAttempts: 1,
+      });
     });
   });
 

@@ -197,12 +197,30 @@ export const status = v.union(
 );
 export type Status = Infer<typeof status>;
 
+/**
+ * How far ahead work may be scheduled. The backend rejects a `runAfter` more
+ * than 5 years out, and batch-worker wakes the loop at the next start time,
+ * so a start beyond this would crash the idle loop. `boundScheduledTime`
+ * applies it to enqueue's `runAt`, and `clampDelayMs` to every delay that
+ * `rescheduleJob` in loop.ts computes.
+ */
+export const MAX_SCHEDULE_AHEAD_MS = 4 * YEAR;
+
+/**
+ * Caps a delay at `MAX_SCHEDULE_AHEAD_MS`. Without it, a huge delay such as
+ * `Number.MAX_SAFE_INTEGER` overflows the int64 `pendingStart.segment` that
+ * `rescheduleJob` writes, and every later loop run throws on that insert.
+ */
+export function clampDelayMs(delayMs: number): number {
+  return Math.min(delayMs, MAX_SCHEDULE_AHEAD_MS);
+}
+
 export function boundScheduledTime(ms: number, console: Logger): number {
   if (ms < Date.now() - YEAR) {
     console.error("scheduled time is too old, defaulting to now", ms);
     return Date.now();
   }
-  if (ms > Date.now() + 4 * YEAR) {
+  if (ms > Date.now() + MAX_SCHEDULE_AHEAD_MS) {
     console.error(
       "scheduled time is too far in the future, defaulting to 1 year from now",
       ms,
