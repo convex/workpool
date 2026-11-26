@@ -40,13 +40,7 @@ type Env = {
   readonly CONVEX_CLOUD_URL: string;
   readonly CONVEX_SITE_URL: string;
   readonly LOG_LEVEL:
-    | "DEBUG"
-    | "TRACE"
-    | "INFO"
-    | "REPORT"
-    | "WARN"
-    | "ERROR"
-    | undefined;
+    "DEBUG" | "TRACE" | "INFO" | "REPORT" | "WARN" | "ERROR" | undefined;
 };
 
 /**
