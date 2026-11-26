@@ -287,20 +287,27 @@ export const enqueueMixed = mutation({
   },
 });
 
-/** Returns the continueWith marker without args, as hand-built data might. */
+/**
+ * Returns a hand-built continueWith marker without usable args: none, or an
+ * ArrayBuffer, which is an object but not one complete's `v.record` accepts.
+ */
 export const badMarkerAction = internalAction({
-  args: {},
-  handler: async () =>
-    ({ __convexWorkpoolContinue: true, delayMs: 0 }) as unknown as number,
+  args: { bytesArgs: v.boolean() },
+  handler: async (_ctx, { bytesArgs }) =>
+    ({
+      __convexWorkpoolContinue: true,
+      ...(bytesArgs ? { args: new ArrayBuffer(8) } : {}),
+      delayMs: 0,
+    }) as unknown as number,
 });
 
 export const enqueueBadMarker = mutation({
-  args: {},
-  handler: async (ctx): Promise<WorkId> => {
+  args: { bytesArgs: v.boolean() },
+  handler: async (ctx, { bytesArgs }): Promise<WorkId> => {
     return await smallPool.enqueueAction(
       ctx,
       internal.test.continue.badMarkerAction,
-      {},
+      { bytesArgs },
       {
         retry: { maxAttempts: 3, initialBackoffMs: 100, base: 2 },
         onComplete: internal.test.continue.recordCompletion,

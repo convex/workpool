@@ -77,6 +77,42 @@ export const vOnCompleteValidator = vOnCompleteArgs;
 
 export type WorkpoolComponent = ComponentApi;
 
+/**
+ * The function reference each enqueue method accepts: a function taking
+ * `Args` whose return value is what onComplete expects (`ReturnType`) or a
+ * continuation from `continueWith`. `FnReturn` is inferred from the reference
+ * itself, so `ContinuationArgsMatch` checks a continuation's args against
+ * `Args` even when there's no typed onComplete to infer `ReturnType` from
+ * (it then falls back to `unknown`, which accepts anything).
+ */
+type EnqueueableFunction<
+  Type extends FunctionType,
+  Args extends DefaultFunctionArgs,
+  ReturnType,
+  FnReturn,
+> = FunctionReference<Type, FunctionVisibility, Args, FnReturn> &
+  FunctionReference<
+    Type,
+    FunctionVisibility,
+    Args,
+    NoInfer<ReturnType> | Continuation<any>
+  > &
+  ContinuationArgsMatch<FnReturn, Args>;
+
+/**
+ * A job that returns `continueWith(nextArgs)` runs again with `nextArgs`, so
+ * they must fit the job's `Args`. Resolves to `unknown` (no constraint) when
+ * they do or the function never continues, and to a type no function
+ * reference has otherwise, so tsc rejects the `fn` argument. A function whose
+ * `returns` validator uses `vContinuation` returns `Continuation<any>`, which
+ * always passes: the validator doesn't know the next step's args.
+ */
+type ContinuationArgsMatch<FnReturn, Args> = [
+  Extract<FnReturn, Continuation<any>>,
+] extends [{ args: NoInfer<Args> }]
+  ? unknown
+  : { "continueWith args must match the function's args": NoInfer<Args> };
+
 export class Workpool {
   /**
    * Initializes a Workpool.
@@ -104,16 +140,14 @@ export class Workpool {
    *   onComplete handling, and scheduling via `runAt` or `runAfter`.
    * @returns The ID of the work that was enqueued.
    */
-  async enqueueAction<Args extends DefaultFunctionArgs, Context, ReturnType>(
+  async enqueueAction<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+    FnReturn,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "action",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"action", Args, ReturnType, FnReturn>,
     fnArgs: Args,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -145,16 +179,10 @@ export class Workpool {
     Args extends DefaultFunctionArgs,
     Context,
     ReturnType,
+    FnReturn,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "action",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"action", Args, ReturnType, FnReturn>,
     argsArray: Array<Args>,
     options?: RetryOption & EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -183,16 +211,14 @@ export class Workpool {
    * @param options - The options for the mutation to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueMutation<Args extends DefaultFunctionArgs, Context, ReturnType>(
+  async enqueueMutation<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+    FnReturn,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "mutation",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"mutation", Args, ReturnType, FnReturn>,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -216,16 +242,10 @@ export class Workpool {
     Args extends DefaultFunctionArgs,
     Context,
     ReturnType,
+    FnReturn,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "mutation",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"mutation", Args, ReturnType, FnReturn>,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -247,16 +267,14 @@ export class Workpool {
    * @param options - The options for the query to specify onComplete handling
    *   and scheduling via `runAt` or `runAfter`.
    */
-  async enqueueQuery<Args extends DefaultFunctionArgs, Context, ReturnType>(
+  async enqueueQuery<
+    Args extends DefaultFunctionArgs,
+    Context,
+    ReturnType,
+    FnReturn,
+  >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "query",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"query", Args, ReturnType, FnReturn>,
     fnArgs: Args,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId> {
@@ -281,16 +299,10 @@ export class Workpool {
     Args extends DefaultFunctionArgs,
     Context,
     ReturnType,
+    FnReturn,
   >(
     ctx: MutationCtx | ActionCtx,
-    fn: FunctionReference<
-      "query",
-      FunctionVisibility,
-      Args,
-      // A job that returns continueWith(nextArgs) runs again with nextArgs,
-      // so they must fit Args. NoInfer keeps Args inferred from fnArgs.
-      NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-    >,
+    fn: EnqueueableFunction<"query", Args, ReturnType, FnReturn>,
     argsArray: Array<Args>,
     options?: EnqueueOptions<Context, ReturnType>,
   ): Promise<WorkId[]> {
@@ -339,7 +351,8 @@ export class Workpool {
    * - `{ state: "finished" }`
    *
    * `previousAttempts` counts attempts toward `retry.maxAttempts`, so
-   * attempts that threw `RescheduleError` aren't included.
+   * attempts that threw `RescheduleError` aren't included, and it starts
+   * again at 0 at each `continueWith` step.
    */
   async status(
     ctx: QueryCtx | MutationCtx | ActionCtx,
@@ -653,16 +666,12 @@ export async function enqueueBatch<
   Args extends DefaultFunctionArgs,
   ReturnType,
   Context,
+  FnReturn,
 >(
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<
-    FnType,
-    FunctionVisibility,
-    Args,
-    NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-  >,
+  fn: EnqueueableFunction<FnType, Args, ReturnType, FnReturn>,
   fnArgsArray: Array<Args>,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;
@@ -721,16 +730,12 @@ export async function enqueue<
   Args extends DefaultFunctionArgs,
   ReturnType,
   Context,
+  FnReturn,
 >(
   component: WorkpoolComponent,
   ctx: MutationCtx | ActionCtx,
   fnType: FnType,
-  fn: FunctionReference<
-    FnType,
-    FunctionVisibility,
-    Args,
-    NoInfer<ReturnType> | Continuation<NoInfer<Args>>
-  >,
+  fn: EnqueueableFunction<FnType, Args, ReturnType, FnReturn>,
   fnArgs: Args,
   options: EnqueueOptions<Context, ReturnType> & {
     retryBehavior?: RetryBehavior;

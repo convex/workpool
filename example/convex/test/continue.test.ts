@@ -182,8 +182,15 @@ describe("continueWith", () => {
     ]);
   });
 
-  test("fails a job that returns the marker without args", async () => {
-    await t.mutation(api.test.continue.enqueueBadMarker, {});
+  test.each([
+    { bytesArgs: false, label: "without args" },
+    // getContinuation used to accept any object here; complete's v.record
+    // validator then rejected the ArrayBuffer and the job stayed running.
+    { bytesArgs: true, label: "with ArrayBuffer args" },
+  ])("fails a job that returns the marker $label", async ({ bytesArgs }) => {
+    const id = await t.mutation(api.test.continue.enqueueBadMarker, {
+      bytesArgs,
+    });
 
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 
@@ -192,5 +199,9 @@ describe("continueWith", () => {
       expect.objectContaining({ result: "failed" }),
     ]);
     expect(completions[0]!.error).toMatch(/without an args object/);
+    // Not left in `running` by a rejected complete call.
+    expect(await t.query(api.example.status, { id })).toEqual({
+      state: "finished",
+    });
   });
 });

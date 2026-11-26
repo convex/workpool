@@ -265,12 +265,14 @@ export async function completeHandler(
 
 /**
  * Stores the args for a job's next step, and starts its retry budget over.
- * Throws if the args are too large to store. completeHandler catches that and
- * fails the job, but this mutation still commits, so nothing here may be
- * written before the step is known to fit: layoutPayload runs (and throws)
- * before any write, and the new payload is inserted before the old one is
- * deleted, so a failure leaves the old args and onComplete context in place
- * for onComplete to read.
+ * Throws if the args can't be stored. completeHandler catches that and fails
+ * the job, but this mutation still commits, so a throw must leave the work
+ * and its old payload as they were. layoutPayload throws before any write
+ * when the args are too large. After that the new payload is inserted before
+ * the work is patched and the old payload deleted; if the patch throws, the
+ * new payload is deleted again before rethrowing, so the old args and
+ * onComplete context stay in place for onComplete to read and nothing is
+ * orphaned.
  */
 async function continueWithArgs(
   ctx: MutationCtx,
@@ -294,14 +296,21 @@ async function continueWithArgs(
         ? rest
         : { ...rest, context: layout.context };
   }
-  await ctx.db.patch("work", work._id, {
-    fnArgs: layout.fnArgs,
-    onComplete,
-    payloadId,
-    payloadSize: layout.payload ? layout.payloadSize : undefined,
-    // Each step gets the full retry budget.
-    skippedAttempts: work.attempts,
-  });
+  try {
+    await ctx.db.patch("work", work._id, {
+      fnArgs: layout.fnArgs,
+      onComplete,
+      payloadId,
+      payloadSize: layout.payload ? layout.payloadSize : undefined,
+      // Each step gets the full retry budget.
+      skippedAttempts: work.attempts,
+    });
+  } catch (e) {
+    // The work still points at its old payload, so nothing would ever
+    // delete the one inserted above.
+    if (payloadId) await ctx.db.delete("payload", payloadId);
+    throw e;
+  }
   if (work.payloadId) {
     // Deleting a missing doc throws. The work already points at the new
     // payload, so a throw here would fail a step that was stored fine.

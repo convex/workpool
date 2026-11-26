@@ -2,7 +2,15 @@ import { getConvexSize } from "convex/values";
 
 export const INLINE_METADATA_THRESHOLD = 8_000; // 8KB threshold
 export const MAX_DOC_SIZE = 1_000_000; // Some buffer for 1MiB actual limit
-const PAYLOAD_DOC_OVERHEAD = 78; // Size of { args: null, context: null }
+/**
+ * The backend's limit on one document, system fields included (MAX_USER_SIZE
+ * in the Convex backend; convex-test enforces the same limit on insert).
+ */
+export const MAX_DOCUMENT_SIZE = 1 << 20;
+// getDocumentSize of { args: null, context: null } with a 32-character _id
+// and its _creationTime. Real args and context replace the two 1-byte nulls,
+// which leaves 2 bytes of slack for a longer _id.
+const PAYLOAD_DOC_OVERHEAD = 78;
 
 /**
  * Decides whether a job's args and onComplete context are stored on the work
@@ -45,10 +53,13 @@ export function layoutPayload(
       // Each can pass its own check above and still overflow it together;
       // throw here, before the caller writes anything, rather than at the
       // payload insert (continueWithArgs in complete.ts relies on this).
+      // Compare against the backend's real limit, not MAX_DOC_SIZE: before
+      // this check, the payload insert was the only limit on the pair, so
+      // anything the backend stores must still be accepted.
       const combinedSize = fnArgsSize + contextSize + PAYLOAD_DOC_OVERHEAD;
-      if (combinedSize > MAX_DOC_SIZE) {
+      if (combinedSize > MAX_DOCUMENT_SIZE) {
         throw new Error(
-          `Function arguments and onComplete context for function ${fnName} too large together: ${combinedSize} bytes (max: ${MAX_DOC_SIZE} bytes)`,
+          `Function arguments and onComplete context for function ${fnName} too large together: ${combinedSize} bytes (max: ${MAX_DOCUMENT_SIZE} bytes)`,
         );
       }
       return {

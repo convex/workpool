@@ -194,9 +194,10 @@ describe("complete", () => {
 
     it("keeps the old payload if storing the next step's payload fails", async () => {
       // The context alone goes in a payload document; the next step's 20 KB
-      // args join it, which layoutPayload accepts. Then the insert fails, as
-      // a real backend's 1 MiB check could. continueWithArgs inserts before
-      // it deletes, so onComplete still gets the context from the old payload.
+      // args join it, which layoutPayload accepts. The combined payload is
+      // under 1 MiB, so the insert failure below is injected, to exercise
+      // continueWithArgs inserting the new payload before it deletes the old
+      // one: onComplete still gets the context from the old payload.
       const context = "c".repeat(600_000);
       const workId = await t.mutation(api.lib.enqueue, {
         fnHandle: "testHandle",
@@ -253,6 +254,81 @@ describe("complete", () => {
           }),
         }),
       );
+    });
+
+    it("deletes the next step's payload if patching the work fails", async () => {
+      // continueWithArgs inserts the next step's payload, then patches the
+      // work to point at it. If the patch throws, the work still points at
+      // its old payload, so the new one must be deleted, not left orphaned.
+      const context = "c".repeat(20_000);
+      const workId = await t.mutation(api.lib.enqueue, {
+        fnHandle: "testHandle",
+        fnName: "testFunction",
+        fnArgs: {},
+        fnType: "action",
+        runAt: Date.now(),
+        config: { maxParallelism: 10, logLevel: "WARN" },
+        onComplete: { fnHandle: "testOnComplete", context },
+      });
+      const oldPayloads = await t.run((ctx) =>
+        ctx.db.query("payload").collect(),
+      );
+      expect(oldPayloads).toHaveLength(1);
+      const schedulerSpy = vi.fn();
+      await t.run(async (ctx) => {
+        let workPatches = 0;
+        const db = new Proxy(ctx.db, {
+          get(target, prop, receiver) {
+            if (prop === "patch") {
+              return (table: string, id: never, value: never) => {
+                // completeHandler patches the work's attempt counts first;
+                // the second patch on "work" is continueWithArgs'.
+                if (table === "work" && ++workPatches === 2) {
+                  throw new Error("injected patch failure");
+                }
+                return target.patch(table as never, id, value);
+              };
+            }
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        await completeHandler(
+          {
+            ...ctx,
+            db,
+            scheduler: { ...ctx.scheduler, runAfter: schedulerSpy },
+          },
+          {
+            jobs: [
+              {
+                workId,
+                runResult: { kind: "success", returnValue: null },
+                attempt: 0,
+                continueWith: { args: { a: "x".repeat(20_000) }, delayMs: 0 },
+              },
+            ],
+          },
+        );
+      });
+      expect(schedulerSpy).toHaveBeenCalledWith(
+        0,
+        "testOnComplete",
+        expect.objectContaining({
+          workId,
+          context,
+          result: expect.objectContaining({
+            kind: "failed",
+            error: expect.stringMatching(/injected patch failure/),
+          }),
+        }),
+      );
+      // Only the old payload is left; the failed job's cleanup may remove
+      // it too, but the next step's payload must not survive.
+      const payloads = await t.run((ctx) => ctx.db.query("payload").collect());
+      expect(
+        payloads.filter((p) => p._id !== oldPayloads[0]!._id),
+      ).toHaveLength(0);
     });
 
     it("should process a failed job with retry behavior", async () => {

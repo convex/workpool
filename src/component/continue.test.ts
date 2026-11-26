@@ -10,7 +10,7 @@ describe("continueWith", () => {
     });
   });
 
-  it("caps huge delays at the enqueue bound", () => {
+  it("caps huge delays at four years", () => {
     const next = continueWith({}, { delayMs: Number.MAX_SAFE_INTEGER });
     expect(next.delayMs).toBe(MAX_SCHEDULE_AHEAD_MS);
     // A hand-built value skips continueWith's clamp; getContinuation clamps.
@@ -24,6 +24,14 @@ describe("continueWith", () => {
     expect(() => continueWith({}, { delayMs: NaN })).toThrow();
   });
 
+  it("accepts plain args, including ones without a prototype", () => {
+    const args = Object.assign(Object.create(null), { a: 1 });
+    expect(getContinuation({ ...continueWith({}), args })).toEqual({
+      args: { a: 1 },
+      delayMs: 0,
+    });
+  });
+
   it("ignores values without the marker", () => {
     expect(getContinuation({ args: {}, delayMs: 0 })).toBeUndefined();
     expect(getContinuation(null)).toBeUndefined();
@@ -32,7 +40,16 @@ describe("continueWith", () => {
 
   it("reports an error for the marker without usable args", () => {
     const marker = { ...continueWith({}) } as Record<string, unknown>;
-    for (const args of [undefined, null, [1], "x"]) {
+    for (const args of [
+      undefined,
+      null,
+      [1],
+      "x",
+      // Objects, but not plain ones: complete's v.record validator rejects
+      // them, so getContinuation must too.
+      new ArrayBuffer(8),
+      new Date(0),
+    ]) {
       expect(getContinuation({ ...marker, args })).toEqual({
         error: expect.stringMatching(/without an args object/),
       });

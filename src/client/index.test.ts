@@ -1,6 +1,9 @@
 import {
+  type ApiFromModules,
   defineSchema,
   defineTable,
+  internalActionGeneric,
+  internalMutationGeneric,
   makeFunctionReference,
   type DataModelFromSchemaDefinition,
   type FunctionArgs,
@@ -30,6 +33,7 @@ import {
   Workpool,
   type WorkId,
   type WorkpoolComponent,
+  vContinuation,
   vOnCompleteArgs,
   vResult,
   vWorkId,
@@ -836,6 +840,92 @@ test("continueWith args are checked against the job's args", () => {
       { onComplete, context: { label: "job" } },
     );
   }).returns.toEqualTypeOf<Promise<WorkId>>();
+});
+
+// Registered functions, so the references below have the types codegen gives
+// them; the handlers never run.
+const unionReturns = v.union(v.number(), vContinuation);
+// The handler's return type is the validator's, as when it's declared as
+// Promise<Infer<typeof returns>>. Before vContinuation's args were typed any,
+// its Record<string, any> args didn't fit { n: number } (TS2345).
+const _unionReturnsJob = internalActionGeneric({
+  args: { n: v.number() },
+  returns: unionReturns,
+  handler: async (_ctx, { n }): Promise<Infer<typeof unionReturns>> =>
+    n > 3 ? n : continueWith({ n: n + 1 }),
+});
+const _wrongContinueJob = internalActionGeneric({
+  args: { n: v.number() },
+  handler: async (_ctx, { n }) => (n > 3 ? n : continueWith({ page: n })),
+});
+const _typedOnComplete = internalMutationGeneric({
+  args: vOnCompleteArgs(v.object({ label: v.string() }), v.number()),
+  handler: async () => {},
+});
+type Refs = ApiFromModules<{
+  jobs: {
+    unionReturnsJob: typeof _unionReturnsJob;
+    wrongContinueJob: typeof _wrongContinueJob;
+    typedOnComplete: typeof _typedOnComplete;
+  };
+}>["jobs"];
+const continueRefs = {
+  unionReturnsJob: makeFunctionReference(
+    "jobs:unionReturnsJob",
+  ) as unknown as Refs["unionReturnsJob"],
+  wrongContinueJob: makeFunctionReference(
+    "jobs:wrongContinueJob",
+  ) as unknown as Refs["wrongContinueJob"],
+  typedOnComplete: makeFunctionReference(
+    "jobs:typedOnComplete",
+  ) as unknown as Refs["typedOnComplete"],
+};
+
+test("a returns validator with vContinuation fits a typed onComplete", () => {
+  // vContinuation's args are typed any, since the validator can't know the
+  // next step's args, so this pattern compiles but its continueWith args
+  // aren't checked against { n: number }.
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    void pool.enqueueAction(ctx, continueRefs.unionReturnsJob, { n: 0 });
+    return pool.enqueueAction(
+      ctx,
+      continueRefs.unionReturnsJob,
+      { n: 0 },
+      { onComplete: continueRefs.typedOnComplete, context: { label: "job" } },
+    );
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+});
+
+test("mismatched continueWith args fail with or without onComplete", () => {
+  // With no returns validator, the handler's inferred return type carries
+  // continueWith's args, so they're checked against the job's args.
+  expectTypeOf((pool: Workpool, ctx: MutationCtx) => {
+    void pool.enqueueAction(
+      ctx,
+      // @ts-expect-error continueWith({ page }) doesn't fit { n: number }.
+      continueRefs.wrongContinueJob,
+      { n: 0 },
+      { onComplete: continueRefs.typedOnComplete, context: { label: "job" } },
+    );
+    // Without options there's no onComplete to infer the return type from,
+    // so any non-continuation return is accepted, but continuation args are
+    // still checked.
+    return pool.enqueueAction(
+      ctx,
+      // @ts-expect-error continueWith({ page }) doesn't fit { n: number }.
+      continueRefs.wrongContinueJob,
+      { n: 0 },
+    );
+  }).returns.toEqualTypeOf<Promise<WorkId>>();
+});
+
+test("continueWith only accepts Convex values as args", () => {
+  // Optional properties are fine: their values include undefined.
+  expectTypeOf(
+    continueWith<{ cursor?: string; ids: number[] }>({ ids: [1] }),
+  ).toEqualTypeOf<Continuation<{ cursor?: string; ids: number[] }>>();
+  // @ts-expect-error A function isn't a Convex value.
+  continueWith({ callback: () => {} });
 });
 
 test("completion validators preserve the declared context and result", () => {

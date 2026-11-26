@@ -61,7 +61,13 @@ export const runMutationWrapper = internalMutation({
       // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
       // but we want the mutation to be a separate transaction to reduce the window for OCCs.
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [{ workId, attempt, ...success(console, workId, returnValue) }],
+        jobs: [
+          {
+            workId,
+            attempt,
+            ...success(console, workId, returnValue, args.fnType),
+          },
+        ],
       });
     } catch (e: unknown) {
       await ctx.scheduler.runAfter(0, internal.complete.complete, {
@@ -169,7 +175,7 @@ async function runOne(
         ? await ctx.runAction(args.fnHandle as FunctionHandle<"action">, fnArgs)
         : await ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs);
     return {
-      ...success(console, args.workId, returnValue),
+      ...success(console, args.workId, returnValue, args.fnType),
       runOnCompleteInline: true,
     };
   } catch (e: unknown) {
@@ -179,15 +185,27 @@ async function runOne(
 }
 
 /** How a job that returned should complete: continued, or succeeded. */
-function success(console: Logger, workId: Id<"work">, returnValue: unknown) {
+function success(
+  console: Logger,
+  workId: Id<"work">,
+  returnValue: unknown,
+  fnType: "action" | "mutation" | "query",
+) {
   const continuation = getContinuation(returnValue);
   if (continuation && "error" in continuation) {
     // A hand-built marker object with bad args: running the next step would
     // fail anyway, and reporting it as success would hand onComplete the
     // marker object as the result. Retrying would return the same value.
-    console.error(`[worker] ${workId} ${continuation.error}`);
+    // A mutation returned normally, so runMutationWrapper's transaction
+    // commits its writes; say so, since a failed result usually means the
+    // writes rolled back.
+    const error =
+      fnType === "mutation"
+        ? `${continuation.error}. The mutation's writes were committed.`
+        : continuation.error;
+    console.error(`[worker] ${workId} ${error}`);
     return {
-      runResult: { kind: "failed", error: continuation.error } as RunResult,
+      runResult: { kind: "failed", error } as RunResult,
       nonRetryable: true,
     };
   }

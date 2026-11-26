@@ -194,7 +194,8 @@ export const status = query({
 });
 // previousAttempts is countedAttempts(work), not work.attempts: attempts
 // that threw RescheduleError don't use up the retry budget, so they don't
-// show up here either.
+// show up here either. continueWithArgs in complete.ts sets skippedAttempts
+// to work.attempts at each continueWith step, so it starts again at 0 there.
 async function statusHandler(ctx: QueryCtx, { id }: { id: Id<"work"> }) {
   const work = await ctx.db.get("work", id);
   if (!work) {
