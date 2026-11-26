@@ -12,7 +12,7 @@ import { api, internal } from "./_generated/api.js";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation } from "./_generated/server.js";
 import { MAX_COMPLETING } from "./loop.js";
-import { MAX_COMPLETION_RERUNS } from "./recovery.js";
+import { MAX_COMPLETION_RERUNS, RECOVERY_READ_BUDGET } from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
 import { MINUTE, SECOND, vResult } from "./shared.js";
@@ -280,6 +280,98 @@ describe("lost completion", () => {
     expect(canceled).toHaveLength(N);
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["B"]);
     await expectFinished(t, b);
+  });
+
+  it("recovers a mutation whose completion was lost before completionId existed", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A");
+    completeFaults.set(a, 1);
+    const b = await enqueue(t, "B");
+
+    // A's wrapper succeeds and its `complete` fails. Clearing completionId
+    // leaves A as an older `runMutationWrapper` left it.
+    await drive(t, 10 * SECOND);
+    await t.run(async (ctx) => {
+      const work = await ctx.db.get("work", a);
+      expect(work?.completionId).toBeDefined();
+      await ctx.db.patch("work", a, { completionId: undefined });
+    });
+    expect(onCompleteRan).not.toHaveBeenCalled();
+
+    await drive(t, 15 * MINUTE);
+
+    expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
+    expect(onCompleteRan.mock.calls).toEqual([
+      ["A", "success"],
+      ["B", "success"],
+    ]);
+    await expectFinished(t, a, b);
+  });
+
+  it("passes jobs to another recover call past the read budget", async () => {
+    const t = setup();
+    const big = "x".repeat(Math.ceil(RECOVERY_READ_BUDGET / 3));
+    const ids = await t.run(async (ctx) => {
+      const out = [];
+      for (let i = 0; i < 4; i++) {
+        const workId = await ctx.db.insert("work", {
+          fnType: "mutation",
+          fnHandle: "handle",
+          fnName: `W${i}`,
+          fnArgs: {},
+          attempts: 0,
+        });
+        completeFaults.set(workId, 1);
+        const completionId = await ctx.scheduler.runAfter(
+          0,
+          internal.complete.complete,
+          {
+            jobs: [
+              {
+                workId,
+                runResult: { kind: "success", returnValue: big },
+                attempt: 0,
+              },
+            ],
+          },
+        );
+        await ctx.db.patch("work", workId, { completionId });
+        out.push({ workId, completionId });
+      }
+      return out;
+    });
+    // Each injected fault fails its `complete` once.
+    vi.advanceTimersByTime(SECOND);
+    await t.finishInProgressScheduledFunctions();
+
+    await t.mutation(internal.recovery.recover, {
+      jobs: ids.map(({ workId, completionId }) => ({
+        workId,
+        scheduledId: completionId,
+        attempt: 0,
+        started: Date.now() - 10 * MINUTE,
+      })),
+    });
+
+    const after = await t.run(async (ctx) => ({
+      works: await Promise.all(
+        ids.map(({ workId }) => ctx.db.get("work", workId)),
+      ),
+      recovers: (await ctx.db.system.query("_scheduled_functions").collect())
+        .filter((f) => f.name.includes("recover") && f.state.kind === "pending")
+        .map((f) => (f.args[0] as { jobs: { workId: string }[] }).jobs),
+    }));
+    // The first three fill the budget and are re-run here; the fourth waits
+    // for the next recover call.
+    expect(after.works.map((w) => w?.completionReruns)).toEqual([
+      1,
+      1,
+      1,
+      undefined,
+    ]);
+    expect(after.recovers).toEqual([
+      [expect.objectContaining({ workId: ids[3]!.workId })],
+    ]);
   });
 
   it("waits on a completion that's still pending in the scheduler", async () => {

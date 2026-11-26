@@ -1,13 +1,34 @@
-import { type Infer, v } from "convex/values";
-import type { Doc } from "./_generated/dataModel.js";
+import { getConvexSize, type Infer, v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { internal } from "./_generated/api.js";
 import { internalMutation, type MutationCtx } from "./_generated/server.js";
+import type { SystemDataModel } from "convex/server";
 import { createLogger, type Logger } from "./logging.js";
 import { type CompleteJob, completeHandler } from "./complete.js";
 import { kickMainLoop } from "./kick.js";
 
 // Re-run a failed completion this many times before giving up on it.
 export const MAX_COMPLETION_RERUNS = 5;
+
+/**
+ * How many bytes of `_scheduled_functions` docs one `recover` call reads
+ * before passing its remaining jobs to a new `recover` call. A completion's
+ * args hold return values, up to about 2MB per batch (`MAX_BATCH_SIZE` in
+ * complete.ts), so 32 of them could pass the transaction read limit. A
+ * `recover` that fails that way rolls back, and `handleRecovery` in loop.ts
+ * would build the same batch again every minute.
+ */
+export const RECOVERY_READ_BUDGET = 4_000_000;
+
+/**
+ * Before completionId existed, `runMutationWrapper` scheduled `complete`
+ * without recording it. That `complete` was created while the wrapper ran,
+ * so `findLegacyCompletion` looks for it among scheduled functions created
+ * in this window before the wrapper's `completedTime`, scanning at most
+ * LEGACY_SCAN_LIMIT of them.
+ */
+const LEGACY_SEARCH_WINDOW_MS = 60_000;
+const LEGACY_SCAN_LIMIT = 500;
 
 const recoveryArgs = v.object({
   jobs: v.array(
@@ -51,8 +72,19 @@ export async function recoveryHandler(
   const console = createLogger(globals?.logLevel);
   const completionJobs: CompleteJob[] = [];
   let freed = false;
+  const reads: Reads = { bytes: 0, docs: new Map() };
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
+    if (i > 0 && reads.bytes >= RECOVERY_READ_BUDGET) {
+      console.warn(
+        `[recovery] read ${reads.bytes} bytes; passing ${jobs.length - i}` +
+          ` jobs to another recover call`,
+      );
+      await ctx.scheduler.runAfter(0, internal.recovery.recover, {
+        jobs: jobs.slice(i),
+      });
+      break;
+    }
     const preamble = `[recovery] Scheduled job ${job.scheduledId} for work ${job.workId}`;
     const pendingCompletion = await ctx.db
       .query("pendingCompletion")
@@ -77,16 +109,20 @@ export async function recoveryHandler(
     if (work.completionId) {
       // The work already committed and scheduled its completion. Check the
       // completion, never the work: re-running committed work isn't safe.
-      const lost = await recoverCompletion(ctx, console, work, preamble);
+      const lost = await recoverCompletion(
+        ctx,
+        console,
+        reads,
+        work,
+        work.completionId,
+        preamble,
+      );
       if (lost) {
         freed = true;
       }
       continue;
     }
-    const scheduled = await ctx.db.system.get(
-      "_scheduled_functions",
-      job.scheduledId,
-    );
+    const scheduled = await readScheduled(ctx, reads, job.scheduledId);
     if (scheduled === null) {
       console.warn(`${preamble} not found in _scheduled_functions`);
       completionJobs.push({
@@ -117,6 +153,48 @@ export async function recoveryHandler(
         });
         break;
       }
+      case "success": {
+        // Only a mutation or query wrapper schedules its own completion; an
+        // action's completion is handled by `completeInline` in worker.ts.
+        if (!scheduled.name.endsWith("runMutationWrapper")) {
+          break;
+        }
+        // Work started before completionId existed, whose `complete` was
+        // lost (#276). Find that `complete` so its result isn't lost too.
+        const legacy = await findLegacyCompletion(ctx, reads, scheduled, job);
+        if (legacy === "truncated") {
+          console.warn(
+            `${preamble} succeeded but its completion wasn't among the` +
+              ` ${LEGACY_SCAN_LIMIT} scheduled functions checked, skipping`,
+          );
+          break;
+        }
+        if (legacy === null) {
+          console.error(
+            `${preamble} succeeded but its completion is gone; freeing its slot`,
+          );
+          await giveUp(ctx, work._id, "Completion failed: not found");
+          freed = true;
+          break;
+        }
+        console.warn(
+          `${preamble} succeeded before completionId was recorded; tracking` +
+            ` its completion ${legacy}`,
+        );
+        await ctx.db.patch("work", work._id, { completionId: legacy });
+        const lost = await recoverCompletion(
+          ctx,
+          console,
+          reads,
+          work,
+          legacy,
+          preamble,
+        );
+        if (lost) {
+          freed = true;
+        }
+        break;
+      }
     }
   }
   if (freed) {
@@ -137,14 +215,12 @@ export async function recoveryHandler(
 async function recoverCompletion(
   ctx: MutationCtx,
   console: Logger,
+  reads: Reads,
   work: Doc<"work">,
+  completionId: Id<"_scheduled_functions">,
   preamble: string,
 ): Promise<boolean> {
-  const completionId = work.completionId!;
-  const completion = await ctx.db.system.get(
-    "_scheduled_functions",
-    completionId,
-  );
+  const completion = await readScheduled(ctx, reads, completionId);
   const state = completion?.state.kind;
   if (state === "pending" || state === "inProgress") {
     console.debug(`${preamble} completion ${completionId} is ${state}`);
@@ -180,14 +256,102 @@ async function recoverCompletion(
     `${preamble} giving up on completion ${completionId} after ${reruns}` +
       ` re-runs (${completion ? error : "not found"}); freeing its slot`,
   );
+  await giveUp(
+    ctx,
+    work._id,
+    `Completion failed: ${completion ? error : "not found"}`,
+  );
+  return true;
+}
+
+/**
+ * Frees the work's slot without running its onComplete: the main loop
+ * removes it from `running` when it handles this pendingCompletion, and the
+ * work doc stays in place.
+ */
+async function giveUp(ctx: MutationCtx, workId: Id<"work">, error: string) {
   await ctx.db.insert("pendingCompletion", {
     segment: ctx.db.vars.commitTs,
-    workId: work._id,
-    runResult: {
-      kind: "failed",
-      error: `Completion failed: ${completion ? error : "not found"}`,
-    },
+    workId,
+    runResult: { kind: "failed", error },
     retry: false,
   });
-  return true;
+}
+
+type ScheduledDoc = SystemDataModel["_scheduled_functions"]["document"];
+
+/** Scheduled function docs this `recover` call has read, and their size. */
+type Reads = {
+  bytes: number;
+  docs: Map<Id<"_scheduled_functions">, ScheduledDoc | null>;
+};
+
+/**
+ * Reads a scheduled function once per `recover` call, adding its size to
+ * `reads.bytes`. Several works in a split batch share one completion doc.
+ */
+async function readScheduled(
+  ctx: MutationCtx,
+  reads: Reads,
+  id: Id<"_scheduled_functions">,
+) {
+  if (reads.docs.has(id)) {
+    return reads.docs.get(id)!;
+  }
+  const doc = await ctx.db.system.get("_scheduled_functions", id);
+  reads.docs.set(id, doc);
+  if (doc) {
+    reads.bytes += getConvexSize(doc);
+  }
+  return doc;
+}
+
+/**
+ * Finds the `complete` a pre-completionId `runMutationWrapper` scheduled for
+ * this attempt. Returns its id, null if it's not in the search window (the
+ * scheduler deletes finished records after a while), or "truncated" if the
+ * window held more than LEGACY_SCAN_LIMIT scheduled functions, so the answer
+ * isn't known.
+ */
+async function findLegacyCompletion(
+  ctx: MutationCtx,
+  reads: Reads,
+  wrapper: ScheduledDoc,
+  job: { workId: Id<"work">; attempt: number },
+): Promise<Id<"_scheduled_functions"> | null | "truncated"> {
+  // `complete` was created while the wrapper ran: after its scheduledTime
+  // and before its completedTime, which is set as it commits. The extra
+  // second covers clock differences. When completedTime isn't recorded,
+  // search forward from scheduledTime instead.
+  const start =
+    wrapper.completedTime === undefined
+      ? wrapper.scheduledTime
+      : Math.max(
+          wrapper.scheduledTime,
+          wrapper.completedTime - LEGACY_SEARCH_WINDOW_MS,
+        );
+  const end =
+    (wrapper.completedTime ?? wrapper.scheduledTime + LEGACY_SEARCH_WINDOW_MS) +
+    1000;
+  const candidates = await ctx.db.system
+    .query("_scheduled_functions")
+    .withIndex("by_creation_time", (q) =>
+      q.gte("_creationTime", start).lte("_creationTime", end),
+    )
+    .take(LEGACY_SCAN_LIMIT + 1);
+  for (const candidate of candidates.slice(0, LEGACY_SCAN_LIMIT)) {
+    reads.bytes += getConvexSize(candidate);
+    if (!candidate.name.endsWith("complete")) {
+      continue;
+    }
+    const jobs = (candidate.args[0] as { jobs?: CompleteJob[] } | undefined)
+      ?.jobs;
+    if (
+      jobs?.some((j) => j.workId === job.workId && j.attempt === job.attempt)
+    ) {
+      reads.docs.set(candidate._id, candidate);
+      return candidate._id;
+    }
+  }
+  return candidates.length > LEGACY_SCAN_LIMIT ? "truncated" : null;
 }
