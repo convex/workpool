@@ -114,6 +114,7 @@ export async function completeHandler(
       await ctx.db.patch("work", work._id, {
         attempts: work.attempts,
         completionId: undefined,
+        completionRerun: undefined,
       });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
