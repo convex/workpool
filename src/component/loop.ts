@@ -36,11 +36,11 @@ import { generateReport, recordCompleted, recordStarted } from "./stats.js";
 import { findPendingStart } from "./pendingStart.js";
 
 const CANCELLATION_BATCH_SIZE = 64; // the only queue that can get unbounded.
-const RECOVERY_BATCH_SIZE = 32;
+export const RECOVERY_BATCH_SIZE = 32;
 const START_BATCH_SIZE = 32;
 // Bound per-iteration work to keep loop latency low.
 const MAIN_BATCH_SIZE = 64;
-const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
+export const RECOVERY_THRESHOLD_MS = 5 * MINUTE; // attempt to recover jobs this old.
 export const RECOVERY_PERIOD_NS = toTimestamp(MINUTE); // how often to check.
 // Keep an idle loop warm briefly to avoid status churn under light traffic.
 export const STATUS_COOLDOWN = 2 * SECOND;

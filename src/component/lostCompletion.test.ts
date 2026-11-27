@@ -23,7 +23,7 @@ import {
 } from "./recovery.js";
 import schema from "./schema.js";
 import { modules } from "./setup.test.js";
-import { MINUTE, SECOND, vResult } from "./shared.js";
+import { HOUR, MINUTE, SECOND, vResult } from "./shared.js";
 
 const userRan = vi.fn<(name: string, attempt: number) => void>();
 const onCompleteRan = vi.fn<(context: string, kind: string) => void>();
@@ -345,7 +345,7 @@ describe("lost completion", () => {
     await expectFinished(t, a, b);
   });
 
-  it("dead-letters a mutation whose completion was lost before completionId existed", async () => {
+  it("repairs a mutation whose completion was lost before completionId existed", async () => {
     const t = setup();
     const a = await enqueue(t, "A");
     completeFaults.set(a, 1);
@@ -362,16 +362,51 @@ describe("lost completion", () => {
     });
     expect(onCompleteRan).not.toHaveBeenCalled();
 
+    // The every-minute recovery doesn't search for A's lost `complete`.
     await drive(t, 10 * MINUTE);
+    expect(onCompleteRan).not.toHaveBeenCalled();
+    expect((await internalState(t))?.running).toMatchObject([{ workId: a }]);
+    expect(await deadLetters(t)).toEqual([]);
+
+    expect(
+      await t.action(internal.recovery.recoverLegacyCompletions, {}),
+    ).toEqual({ deadLettered: 1, resultGone: 0, pending: 0, skipped: [] });
+    await drive(t, 1 * MINUTE);
 
     expect(userRan.mock.calls.map(([name]) => name)).toEqual(["A", "B"]);
     expect(onCompleteRan.mock.calls).toEqual([["B", "success"]]);
     await expectFinished(t, b);
-    // Recovery found the lost completion, so the result can be retried.
+    // The repair found the lost completion, so the result can be retried.
     const [letter] = await deadLetters(t);
     expect(letter).toMatchObject({ workId: a, resultAvailable: true });
     const stored = await t.run((ctx) => ctx.db.get("deadLetter", letter!.id));
     expect(stored?.completionId).toBe(completionId);
+  });
+
+  it("leaves a job whose wrapper finished recently for a later repair", async () => {
+    const t = setup();
+    const a = await enqueue(t, "A");
+    completeFaults.set(a, 1);
+    await drive(t, 10 * SECOND);
+    await t.run(async (ctx) => {
+      await ctx.db.patch("work", a, { completionId: undefined });
+      // Started long ago, as far as the candidate list is concerned.
+      const state = await ctx.db.query("internalState").unique();
+      await ctx.db.patch("internalState", state!._id, {
+        running: state!.running.map((r) => ({
+          ...r,
+          started: r.started - 10 * MINUTE,
+        })),
+      });
+    });
+    expect(
+      await t.action(internal.recovery.recoverLegacyCompletions, {}),
+    ).toEqual({
+      deadLettered: 0,
+      resultGone: 0,
+      pending: 0,
+      skipped: [{ workId: a, reason: "tooRecent" }],
+    });
   });
 
   it("can't retry a dead letter whose result is gone", async () => {
@@ -397,7 +432,7 @@ describe("lost completion", () => {
     expect(await deadLetters(t)).toHaveLength(1);
   });
 
-  it("passes jobs to another recover call past the read budget", async () => {
+  it("leaves jobs past the read budget for the next recovery pass", async () => {
     const t = setup();
     const big = "x".repeat(Math.ceil(RECOVERY_READ_BUDGET / 3));
     const ids = await t.run(async (ctx) => {
@@ -450,31 +485,66 @@ describe("lost completion", () => {
         .filter((f) => f.name.includes("recover") && f.state.kind === "pending")
         .map((f) => (f.args[0] as { jobs: { workId: string }[] }).jobs),
     }));
-    // The first three fill the budget and are dead-lettered here; the fourth
-    // waits for the next recover call.
+    // The first three fill the budget and are dead-lettered here. The fourth
+    // waits for the loop's next recovery pass; no other recover is scheduled.
     expect(after.deadLetters).toEqual(ids.slice(0, 3).map((i) => i.workId));
-    expect(after.recovers).toEqual([
-      [expect.objectContaining({ workId: ids[3]!.workId })],
-    ]);
+    expect(after.recovers).toEqual([]);
   });
+
+  /**
+   * Runs findLegacyCompletion as if a wrapper had run from setup's start to
+   * its end, ten minutes ago: the search only reads records older than the
+   * recovery threshold. Records are scheduled an hour out so advancing the
+   * clock doesn't run them.
+   */
+  async function searchAfterSetup(
+    t: T,
+    setup: (ctx: MutationCtx) => Promise<Id<"work">>,
+  ) {
+    const { workId, scheduledTime, completedTime } = await t.run(
+      async (ctx) => {
+        const scheduledTime = Date.now();
+        const workId = await setup(ctx);
+        return { workId, scheduledTime, completedTime: Date.now() };
+      },
+    );
+    vi.advanceTimersByTime(10 * MINUTE);
+    return t.run(async (ctx) => {
+      const reads: Reads = { bytes: 0, docs: new Map() };
+      // Stands in for the wrapper's record, which the real scheduler marks
+      // with completedTime as the wrapper commits.
+      const wrapper = { scheduledTime, completedTime } as Parameters<
+        typeof findLegacyCompletion
+      >[2];
+      const result = await findLegacyCompletion(ctx, reads, wrapper, {
+        workId,
+        attempt: 0,
+      });
+      return { result, bytes: reads.bytes };
+    });
+  }
+
+  async function insertWork(ctx: MutationCtx) {
+    return ctx.db.insert("work", {
+      fnType: "mutation",
+      fnHandle: "handle",
+      fnName: "A",
+      fnArgs: {},
+      attempts: 0,
+    });
+  }
 
   it("finds a legacy completion behind many older scheduled functions", async () => {
     const t = setup();
-    const found = await t.run(async (ctx) => {
-      const scheduledTime = Date.now();
+    let completionId: Id<"_scheduled_functions"> | undefined;
+    const { result } = await searchAfterSetup(t, async (ctx) => {
       // Unrelated records created earlier in the window than the `complete`.
       for (let i = 0; i < 600; i++) {
-        await ctx.scheduler.runAfter(MINUTE, internal.loop.updateRunStatus, {});
+        await ctx.scheduler.runAfter(HOUR, internal.loop.updateRunStatus, {});
       }
-      const workId = await ctx.db.insert("work", {
-        fnType: "mutation",
-        fnHandle: "handle",
-        fnName: "A",
-        fnArgs: {},
-        attempts: 0,
-      });
-      const completionId = await ctx.scheduler.runAfter(
-        MINUTE,
+      const workId = await insertWork(ctx);
+      completionId = await ctx.scheduler.runAfter(
+        HOUR,
         internal.complete.complete,
         {
           jobs: [
@@ -486,37 +556,19 @@ describe("lost completion", () => {
           ],
         },
       );
-      const reads: Reads = { bytes: 0, docs: new Map() };
-      // Stands in for the wrapper's record, which the real scheduler marks
-      // with completedTime as the wrapper commits.
-      const wrapper = {
-        scheduledTime,
-        completedTime: Date.now(),
-      } as Parameters<typeof findLegacyCompletion>[2];
-      const result = await findLegacyCompletion(ctx, reads, wrapper, {
-        workId,
-        attempt: 0,
-      });
-      return { result, completionId };
+      return workId;
     });
-    expect(found.result).toBe(found.completionId);
+    expect(result).toBe(completionId);
   });
 
   it("stops a legacy search at the read budget", async () => {
     const t = setup();
-    const { result, bytes } = await t.run(async (ctx) => {
-      const scheduledTime = Date.now();
-      const big = "x".repeat(Math.ceil(RECOVERY_READ_BUDGET / 4));
-      const workId = await ctx.db.insert("work", {
-        fnType: "mutation",
-        fnHandle: "handle",
-        fnName: "A",
-        fnArgs: {},
-        attempts: 0,
-      });
+    const big = "x".repeat(Math.ceil(RECOVERY_READ_BUDGET / 4));
+    const { result, bytes } = await searchAfterSetup(t, async (ctx) => {
+      const workId = await insertWork(ctx);
       // Large records with no matching `complete` among them.
       for (let i = 0; i < 10; i++) {
-        await ctx.scheduler.runAfter(MINUTE, internal.complete.complete, {
+        await ctx.scheduler.runAfter(HOUR, internal.complete.complete, {
           jobs: [
             {
               workId,
@@ -526,20 +578,29 @@ describe("lost completion", () => {
           ],
         });
       }
-      const reads: Reads = { bytes: 0, docs: new Map() };
-      const wrapper = {
-        scheduledTime,
-        completedTime: Date.now(),
-      } as Parameters<typeof findLegacyCompletion>[2];
-      const result = await findLegacyCompletion(ctx, reads, wrapper, {
-        workId,
-        attempt: 0,
-      });
-      return { result, bytes: reads.bytes };
+      return workId;
     });
     expect(result).toBe("overBudget");
     // It read up to the budget, not all ten records.
     expect(bytes).toBeLessThan(RECOVERY_READ_BUDGET * 1.5);
+  });
+
+  it("doesn't read scheduled functions created recently", async () => {
+    const t = setup();
+    const { result, bytes } = await t.run(async (ctx) => {
+      const reads: Reads = { bytes: 0, docs: new Map() };
+      const wrapper = {
+        scheduledTime: Date.now() - MINUTE,
+        completedTime: Date.now(),
+      } as Parameters<typeof findLegacyCompletion>[2];
+      const result = await findLegacyCompletion(ctx, reads, wrapper, {
+        workId: await insertWork(ctx),
+        attempt: 0,
+      });
+      return { result, bytes: reads.bytes };
+    });
+    expect(result).toBe("tooRecent");
+    expect(bytes).toBe(0);
   });
 
   it("waits on a completion that's still pending in the scheduler", async () => {
