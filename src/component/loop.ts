@@ -602,7 +602,10 @@ async function scheduleCanceledCompletion(
   );
   const started = Date.now();
   for (const job of jobs) {
-    await ctx.db.patch("work", job.workId, { completionId: scheduledId });
+    await ctx.db.patch("work", job.workId, {
+      completionId: scheduledId,
+      completionRerun: undefined,
+    });
     state.running.push({ workId: job.workId, scheduledId, started });
   }
 }

@@ -72,6 +72,9 @@ export default defineSchema({
     // transaction that schedules it. Recovery checks it instead of the work,
     // and its stored args hold the result if it has to be retried by hand.
     completionId: v.optional(v.id("_scheduled_functions")),
+    // Set when recovery has already re-run this attempt's completion once.
+    // A second failure goes to the dead-letter queue.
+    completionRerun: v.optional(v.boolean()),
   }),
 
   // Work waiting to start, one document per work item.

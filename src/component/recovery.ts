@@ -339,10 +339,11 @@ export const recoverLegacy = internalMutation({
 
 /**
  * Handle work whose completion was scheduled. A pending completion may just
- * be behind a scheduler backlog, so it's left alone. Otherwise the completion
- * failed (or finished without completing the work): the work goes to the
- * dead-letter queue, to be retried or discarded by hand. Returns true if it
- * freed the slot.
+ * be behind a scheduler backlog, so it's left alone. A failed or canceled
+ * completion is run once more from its stored args. If that also fails, or
+ * the result is gone, or it finished without completing the work, the work
+ * goes to the dead-letter queue, to be retried or discarded by hand. Returns
+ * true if it freed the slot.
  */
 async function recoverCompletion(
   ctx: MutationCtx,
@@ -356,6 +357,37 @@ async function recoverCompletion(
   const state = completion?.state;
   if (state?.kind === "pending" || state?.kind === "inProgress") {
     console.debug(`${preamble} completion ${completionId} is ${state.kind}`);
+    return false;
+  }
+  // A `complete` that fails usually hit a platform limit or a transient error
+  // (#276 was "too many system operations"), so run it once more from its
+  // stored args before dead-lettering. `complete` checks the attempt number,
+  // so a second run can't complete the work twice. Work whose onComplete
+  // drives something else, such as a workflow step, then finishes without
+  // someone calling deadLetter.retry.
+  const job =
+    completion &&
+    (state?.kind === "failed" || state?.kind === "canceled") &&
+    !work.completionRerun
+      ? (
+          completion.args[0] as { jobs?: CompleteJob[] } | undefined
+        )?.jobs?.find(
+          (j) => j.workId === work._id && j.attempt === work.attempts,
+        )
+      : undefined;
+  if (job) {
+    console.warn(
+      `${preamble} completion ${completionId} ${state?.kind}; running it again`,
+    );
+    const rerunId = await ctx.scheduler.runAfter(
+      0,
+      internal.complete.complete,
+      { jobs: [job] },
+    );
+    await ctx.db.patch("work", work._id, {
+      completionId: rerunId,
+      completionRerun: true,
+    });
     return false;
   }
   const error =

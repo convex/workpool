@@ -81,7 +81,10 @@ export const runMutationWrapper = internalMutation({
     // completion instead of the work, which isn't safe to run again.
     const work = await ctx.db.get("work", workId);
     if (work?.attempts === attempt) {
-      await ctx.db.patch("work", workId, { completionId });
+      await ctx.db.patch("work", workId, {
+        completionId,
+        completionRerun: undefined,
+      });
     }
   },
 });
