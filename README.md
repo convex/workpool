@@ -312,6 +312,9 @@ Check out the [docstrings](./src/client/index.ts), but notable options include:
   workflows.
 - `retryActionsByDefault`: Whether to retry actions that fail by default.
 - `defaultRetryBehavior`: The default retry behavior for enqueued actions.
+- `logLevel`: How verbose the workpool's logging is (`DEBUG`, `TRACE`, `INFO`,
+  `REPORT`, `WARN`, or `ERROR`). See [below](#setting-the-log-level) for how to
+  override it without a code change.
 
 You can override the retry behavior per-call with the `retry` option.
 
@@ -320,9 +323,31 @@ it at runtime by calling
 `ctx.runMutation(components.myWorkpool.config.update, { maxParallelism: 20 })`
 (you can also call the function with `npx convex run` or the dashboard) This can
 be useful for dynamic scaling of the workpool, and also setting it to 0 to pause
-work. If specified on the Workpool class, it will update on each call to enqueue
-or cancel. Tip: you can create the Workpool class at runtime based on a dynamic
+work. If specified on the Workpool class, it will update on each call to
+`enqueue*`. Tip: you can create the Workpool class at runtime based on a dynamic
 value, such as an environment variable.
+
+#### Setting the log level
+
+The workpool component declares an optional `LOG_LEVEL` environment variable. If
+it's set to a valid log level, it takes precedence over the `logLevel` passed
+via the client or `config.update`. This is handy for turning on verbose logging
+in production without redeploying.
+
+Bind it from your app's `convex.config.ts`:
+
+```ts
+// convex/convex.config.ts
+import { defineApp } from "convex/server";
+import workpool from "@convex-dev/workpool/convex.config.js";
+
+const app = defineApp();
+app.use(workpool, { env: { LOG_LEVEL: "DEBUG" } });
+export default app;
+```
+
+You can also bind it by reference to one of your app's own env vars
+(`app.use(workpool, { env: { LOG_LEVEL: app.env.MY_LOG_LEVEL } })`).
 
 ### Options for enqueueing work
 
