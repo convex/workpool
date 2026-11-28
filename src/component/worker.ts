@@ -53,30 +53,35 @@ export const runMutationWrapper = internalMutation({
       fnArgs = payload.args;
     }
 
+    let job: CompleteJob;
     try {
       const returnValue = await (args.fnType === "query"
         ? ctx.runQuery(args.fnHandle as FunctionHandle<"query">, fnArgs)
         : ctx.runMutation(args.fnHandle as FunctionHandle<"mutation">, fnArgs));
-      // NOTE: we could run the `saveResult` handler here, or call `ctx.runMutation`,
-      // but we want the mutation to be a separate transaction to reduce the window for OCCs.
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          { workId, runResult: { kind: "success", returnValue }, attempt },
-        ],
-      });
+      job = { workId, runResult: { kind: "success", returnValue }, attempt };
     } catch (e: unknown) {
       console.error(e);
-      const runResult = failedResult(e);
-      await ctx.scheduler.runAfter(0, internal.complete.complete, {
-        jobs: [
-          {
-            workId,
-            runResult,
-            attempt,
-            nonRetryable: isNonRetryableError(e),
-          },
-        ],
-      });
+      job = {
+        workId,
+        runResult: failedResult(e),
+        attempt,
+        nonRetryable: isNonRetryableError(e),
+      };
+    }
+    // Scheduling stays outside the try: if it throws, the wrapper fails and
+    // the work's writes roll back, so recovery can safely treat it as failed.
+    // NOTE: we could run the `complete` handler here, but we want it to be a
+    // separate transaction to reduce the window for OCCs.
+    const completionId = await ctx.scheduler.runAfter(
+      0,
+      internal.complete.complete,
+      { jobs: [job] },
+    );
+    // Record the completion with the committed work, so recovery checks the
+    // completion instead of the work, which isn't safe to run again.
+    const work = await ctx.db.get("work", workId);
+    if (work?.attempts === attempt) {
+      await ctx.db.patch("work", workId, { completionId });
     }
   },
 });

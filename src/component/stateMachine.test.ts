@@ -468,13 +468,13 @@ describe("state machine", () => {
       expect(s.pendingStart || s.running).toBe(true);
     });
 
-    it("S7 cancel-pending -> canceled: deletes pendingStart, marks canceled", async () => {
+    it("S7 cancel-pending -> canceled: deletes pendingStart, marks canceled, holds a slot for its completion", async () => {
       const { workId, segment } = await setupState(S7_CANCEL_PENDING);
       await runLoop(segment);
       const s = await observeState(workId);
       expect(s.pendingStart).toBe(false);
       expect(s.pendingCancelation).toBe(false);
-      expect(s.running).toBe(false);
+      expect(s.running).toBe(true);
       if (s.work) {
         expect(s.work.canceled).toBe(true);
       }
@@ -493,11 +493,19 @@ describe("state machine", () => {
     it("S9 canceled+retrying -> does not retry, cancels instead", async () => {
       const { workId, segment } = await setupState(S9_CANCELED_RETRYING);
       await runLoop(segment);
-      const s = await observeState(workId);
+      let s = await observeState(workId);
       expect(s.running).toBe(false);
       expect(s.pendingCompletion).toBe(false);
-      // Should not have re-enqueued
+      // Queued to start now, where it's completed as canceled.
+      expect(s.pendingStart).toBe(true);
+      assert(s.work);
+      expect(s.work.canceled).toBe(true);
+      await runLoop(segment);
+      s = await observeState(workId);
       expect(s.pendingStart).toBe(false);
+      expect(s.running).toBe(true);
+      assert(s.work);
+      expect(s.work.attempts).toBe(1);
     });
 
     it("S2 running (no pending events) -> S2 no change", async () => {
@@ -556,12 +564,15 @@ describe("state machine", () => {
       expect(s.pendingCompletion.resultKind).toBe("failed");
     });
 
-    it("S2 running + complete(canceled) -> work deleted, NO pendingCompletion", async () => {
+    it("S2 running + complete(canceled) -> work deleted, pendingCompletion(canceled)", async () => {
       const { workId } = await setupState(S2_RUNNING);
       await runComplete(workId, { kind: "canceled" }, 0);
       const s = await observeState(workId);
       expect(s.work).toBe(false);
-      expect(s.pendingCompletion).toBe(false);
+      expect(s.pendingCompletion).toEqual({
+        retry: false,
+        resultKind: "canceled",
+      });
     });
 
     it("S12 canceled running + complete(success) -> work deleted (complete ignores canceled flag)", async () => {
@@ -1064,9 +1075,12 @@ describe("state machine", () => {
 
       await runLoop(segment);
       const s = await observeState(workId);
-      expect(s.pendingStart).toBe(false);
+      // Not retried: queued to start now, where it's completed as canceled.
+      expect(s.pendingStart).toBe(true);
       expect(s.running).toBe(false);
       expect(s.pendingCompletion).toBe(false);
+      assert(s.work);
+      expect(s.work.canceled).toBe(true);
     });
 
     it("multiple cancels for the same work complete it once", async () => {
@@ -1119,7 +1133,7 @@ describe("state machine", () => {
       expect(await observeState(workId)).toMatchObject({
         pendingStart: false,
         pendingCancelation: false,
-        running: false,
+        running: true,
         work: { canceled: true },
       });
       await t.run(async (ctx) => {
@@ -1399,11 +1413,15 @@ describe("state machine", () => {
 
       await runLoop(seg);
       const s = await observeState(workId);
-      // Cancel should win: no retry, no pendingStart
-      expect(s.pendingStart).toBe(false);
+      // Cancel should win: no retry. It's queued to start now, where it's
+      // completed as canceled.
+      expect(s.pendingStart).toBe(true);
       expect(s.running).toBe(false);
       expect(s.pendingCompletion).toBe(false);
       expect(s.pendingCancelation).toBe(false);
+      assert(s.work);
+      expect(s.work.canceled).toBe(true);
+      expect(s.work.attempts).toBe(1);
     });
   });
 });

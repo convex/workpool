@@ -93,9 +93,15 @@ export async function completeHandler(
 
   // Schedule all batches after the first one
   for (let i = 1; i < batches.length; i++) {
-    await ctx.scheduler.runAfter(0, internal.complete.complete, {
-      jobs: batches[i]!.map(({ job }) => job),
-    });
+    const completionId = await ctx.scheduler.runAfter(
+      0,
+      internal.complete.complete,
+      { jobs: batches[i]!.map(({ job }) => job) },
+    );
+    // Point recovery at the completion that now holds these jobs.
+    for (const { work } of batches[i]!) {
+      await ctx.db.patch("work", work._id, { completionId });
+    }
   }
 
   const ourBatch = batches[0];
@@ -104,7 +110,11 @@ export async function completeHandler(
   await Promise.all(
     ourBatch.map(async ({ work, job }) => {
       work.attempts++;
-      await ctx.db.patch("work", work._id, { attempts: work.attempts });
+      // The next attempt records its own completion.
+      await ctx.db.patch("work", work._id, {
+        attempts: work.attempts,
+        completionId: undefined,
+      });
       const pendingCompletion = await ctx.db
         .query("pendingCompletion")
         .withIndex("workId", (q) => q.eq("workId", job.workId))
@@ -193,13 +203,12 @@ export async function completeHandler(
         // This is the terminating state for work.
         await ctx.db.delete("work", job.workId);
       }
-      if (job.runResult.kind !== "canceled") {
-        pendingCompletions.push({
-          runResult: stripResult(job.runResult),
-          workId: job.workId,
-          retry,
-        });
-      }
+      // Canceled work's completion holds a slot too, which this releases.
+      pendingCompletions.push({
+        runResult: stripResult(job.runResult),
+        workId: job.workId,
+        retry,
+      });
     }),
   );
   if (pendingCompletions.length > 0) {
